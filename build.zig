@@ -84,13 +84,17 @@ pub fn build(b: *std.Build) void {
     });
 
 
-
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
     // by passing `--prefix` or `-p`.
     b.installArtifact(exe);
 
+    const yaml = b.dependency("yaml", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    exe.root_module.addImport("yaml", yaml.module("yaml"));
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
     // This will evaluate the `run` step rather than the default step.

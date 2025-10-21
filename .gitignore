@@ -1,3 +1,10 @@
+# debug file
+debug.log
+
+# vim swap
+*.sw?
+
+# zig
 .zig-cache/
 zig-out/
 *.o
