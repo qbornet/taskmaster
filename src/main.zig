@@ -20,6 +20,16 @@ const source =
 ;
 
 
+const yamlResult = struct {
+    names: []const []const u8,
+    numbers: []const i16,
+    nested: struct {
+        some: []const u8,
+        wick: []const u8,
+    },
+    finally: [4]f16,
+};
+
 pub fn main() !void {
     const stdout = std.fs.File.stdout();
     const stderr = std.fs.File.stderr();
@@ -42,11 +52,12 @@ pub fn main() !void {
         },
         else => return err,
     };
-    //var arena = if (optimize == .Debug ) std.heap.ArenaAllocator.init(gpa_debug) else std.heap.ArenaAllocator.init(gpa_default);
     const buffer = try allocator.alloc(u8, 1024);
     defer allocator.free(buffer);
     var writer = stdout.writer(buffer);
     try yaml.stringify(&writer.interface);
     std.debug.print("yaml: {s}\n", .{buffer});
+    const result = try yaml.parse(allocator, yamlResult);
+    std.debug.print("result: '{}'", .{result});
     yaml.deinit(allocator);
 }
