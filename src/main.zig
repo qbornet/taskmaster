@@ -3,6 +3,7 @@ const mem = std.mem;
 
 const reader = @import("reader/readline.zig");
 const programs = @import("programs/programs.zig");
+const parser = @import("parser/parser.zig");
 
 const assert = std.debug.assert;
 const optimize = @import("builtin").mode;
@@ -27,18 +28,31 @@ pub fn main() !void {
     }
     if (optimize == .Debug) std.debug.print("Optimization mode: '{s}'\n", .{@tagName(optimize)});
     allocator = if (optimize == .Debug) gpa_debug.allocator() else gpa_default.allocator();
+    if (std.os.argv.len != 2) {
+        std.debug.print("usage: ./taskmaster <configuration.yaml>", .{});
+        std.process.exit(1);
+    }
+    const endIndex = std.mem.indexOfSentinel(u8, 0, std.os.argv[1]);
+    const arg = std.os.argv[1][0..endIndex-1];
+    try parser.startParsing(allocator, arg);
     while (true) {
         const line = try reader.readLine(allocator, stdin);
         std.debug.print("line: '{s}'\n", .{line});
-        const exit = programs.doProgramAction(line) catch false;
+        const exit = programs.doProgramAction(allocator, line) catch |err| blk: {
+            switch (err) {
+                error.HighTokenCount => std.debug.print("Too many program entry passed\n", .{}),
+                error.ProgramNotFound => {
+                    const opt_pos = std.ascii.indexOfIgnoreCase(line, " ");
+                    if (opt_pos) |pos| {
+                        std.debug.print("Programs '{s}' doens't exist\n", .{line[pos+1..]});
+                    } else std.debug.print("Programs doens't exist\n", .{});
+                },
+            }
+            break :blk false;
+        };
         if (exit) {
             allocator.free(line);
             break;
-        } else {
-            const opt_pos = std.ascii.indexOfIgnoreCase(line, " ");
-            if (opt_pos) |pos| {
-                std.debug.print("Programs '{s}' doens't exist\n", .{line[pos+1..]});
-            } else std.debug.print("Programs doens't exist\n", .{});
         }
         allocator.free(line);
     }
