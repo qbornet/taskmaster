@@ -57,11 +57,13 @@ pub fn doProgramAction(allocator: Allocator, line: []const u8) !bool {
     if (mem.eql(u8, line, "exit")) { 
         return true;
     }  else if (mem.eql(u8, line, "reload")) {
-        conf.reloadConfiguration(allocator, false);
+        try conf.loadConfiguration(allocator, false);
     } else if (mem.eql(u8, line, "status")) {
         if (std.os.argv.len == 2) {
+            std.debug.print("inside action status\n", .{});
             const indexEnd = std.mem.indexOfSentinel(u8, 0, std.os.argv[1]);
-            try parser.readYamlFile(allocator, std.os.argv[1][0..indexEnd-1]);
+            const result = try parser.readYamlFile(allocator, std.os.argv[1][0..indexEnd]);
+            std.debug.print("{s}\n", .{result});
         }
     } else if (mem.startsWith(u8, line, "start")) {
         try startProgram(line, true);

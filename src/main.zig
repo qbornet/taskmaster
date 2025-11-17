@@ -1,9 +1,10 @@
 const std = @import("std");
 const mem = std.mem;
 
-const reader = @import("reader/readline.zig");
-const programs = @import("programs/programs.zig");
 const parser = @import("parser/parser.zig");
+const reader = @import("reader/readline.zig");
+const conf = @import("programs/configuration.zig");
+const programs = @import("programs/programs.zig");
 
 const assert = std.debug.assert;
 const optimize = @import("builtin").mode;
@@ -33,8 +34,9 @@ pub fn main() !void {
         std.process.exit(1);
     }
     const endIndex = std.mem.indexOfSentinel(u8, 0, std.os.argv[1]);
-    const arg = std.os.argv[1][0..endIndex-1];
+    const arg = std.os.argv[1][0..endIndex];
     try parser.startParsing(allocator, arg);
+    try conf.loadConfiguration(allocator, true);
     while (true) {
         const line = try reader.readLine(allocator, stdin);
         std.debug.print("line: '{s}'\n", .{line});
@@ -47,6 +49,7 @@ pub fn main() !void {
                         std.debug.print("Programs '{s}' doens't exist\n", .{line[pos+1..]});
                     } else std.debug.print("Programs doens't exist\n", .{});
                 },
+                else => std.debug.print("Unknown error: '{s}'", .{@errorName(err)}),
             }
             break :blk false;
         };

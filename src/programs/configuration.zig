@@ -2,20 +2,23 @@ const std = @import("std");
 const fmt = std.fmt;
 
 const Allocator = std.mem.Allocator;
-const programs_map = @import("../parser/parser.zig").programs_map;
+const parser = @import("../parser/parser.zig");
 
 fn setupWorkingDir(allocator: Allocator, working_dir: []const u8, program_name: []const u8) !void {
     const path = try std.fs.realpathAlloc(allocator, working_dir);
     std.debug.print("for '{s}' realpath={s}\n", .{program_name, path});
 }
 
-pub fn reloadConfiguration(allocator: Allocator, start_boot: bool) void {
+pub fn loadConfiguration(allocator: Allocator, start_boot: bool) !void {
     if (start_boot) {
-        var iter = programs_map.iterator();
+        var iter = parser.programs_map.iterator();
+        std.debug.print("creation of the iterator", .{});
         while (iter.next()) |entry| {
-            try setupWorkingDir(allocator, entry.value_ptr.content.workingdir, entry.key_ptr.*);
+            std.debug.print("iter.next()", .{});
+            const value = entry.value_ptr.*;
+            try setupWorkingDir(allocator, value.workingdir, value.name);
         }
     } else {
-        std.debug.print("realoding config\n", .{});
+        std.debug.print("reloading config\n", .{});
     }
 }
