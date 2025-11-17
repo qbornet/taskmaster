@@ -30,6 +30,7 @@ const ReadYamlError = error{
     FailedRead,
 };
 
+pub var autostart_map: StringHashMap(*Program) = undefined;
 pub var programs_map: StringHashMap(*Program) = undefined;
 
 fn cloneProgram(allocator: Allocator, original: *const Program) !*Program {
@@ -48,17 +49,25 @@ fn cloneProgram(allocator: Allocator, original: *const Program) !*Program {
     return clone;
 }
 
+fn destroyProgram(allocator: Allocator, to_destroy: *Program) void {
+    inline for (std.meta.fields(Program)) |field| {
+        if (field.type == []const u8 or field.type == []u8) {
+            allocator.free(@field(to_destroy, field.name));
+        }
+    }
+    allocator.destroy(to_destroy);
+}
+
 pub fn deinitPrograms(allocator: Allocator) void {
     var iter = programs_map.iterator();
     while (iter.next()) |entry| {
-        const value = entry.value_ptr.*;
-        inline for (std.meta.fields(Program)) |field| {
-            if (field.type == []const u8 or field.type == []u8) {
-                allocator.free(@field(value.*, field.name));
-            }
-        }
-        allocator.destroy(value);
+        destroyProgram(allocator, entry.value_ptr.*);
     }
+    iter = autostart_map.iterator();
+    while (iter.next()) |entry| {
+        destroyProgram(allocator, entry.value_ptr.*);
+    }
+    autostart_map.deinit();
     programs_map.deinit();
 }
 
@@ -92,9 +101,16 @@ pub fn startParsing(allocator: Allocator, path: []const u8) !void {
     defer ymlz.deinit(result);
 
     programs_map = .init(allocator);
+    autostart_map = .init(allocator);
     errdefer programs_map.deinit();
+    errdefer autostart_map.deinit();
     for (result.programs) |program| {
         const clone = try cloneProgram(allocator, &program);
-        try programs_map.put(clone.name, clone);
+        errdefer destroyProgram(allocator, clone);
+        if (clone.autostart) {
+            try autostart_map.put(clone.name, clone);
+        } else {
+            try programs_map.put(clone.name, clone);
+        }
     }
 }
