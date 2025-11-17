@@ -54,17 +54,18 @@ fn startProgram(line: []const u8, count: bool) !void {
 }
 
 pub fn doProgramAction(allocator: Allocator, line: []const u8) !bool {
+    const arg = std.os.argv[1];
     if (mem.eql(u8, line, "exit")) { 
         return true;
     }  else if (mem.eql(u8, line, "reload")) {
         try conf.loadConfiguration(allocator, false);
     } else if (mem.eql(u8, line, "status")) {
-        if (std.os.argv.len == 2) {
-            std.debug.print("inside action status\n", .{});
-            const indexEnd = std.mem.indexOfSentinel(u8, 0, std.os.argv[1]);
-            const result = try parser.readYamlFile(allocator, std.os.argv[1][0..indexEnd]);
+            const end = std.mem.indexOfSentinel(u8, 0, arg);
+            const realpath = try std.fs.cwd().realpathAlloc(allocator, arg[0..end]);
+            defer allocator.free(realpath);
+            const result = try parser.readYamlFile(allocator, realpath);
+            defer allocator.free(result);
             std.debug.print("{s}\n", .{result});
-        }
     } else if (mem.startsWith(u8, line, "start")) {
         try startProgram(line, true);
     } else if (mem.startsWith(u8, line, "stop")) {
