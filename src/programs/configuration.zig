@@ -11,12 +11,12 @@ fn setupWorkingDir(allocator: Allocator, working_dir: []const u8, program_name: 
 
 pub fn loadConfiguration(allocator: Allocator, start_boot: bool) !void {
     if (start_boot) {
-        var iter = parser.programs_map.iterator();
-        std.debug.print("creation of the iterator", .{});
+        _ = allocator;
+        var testMap = parser.programs_map;
+        var iter = testMap.iterator();
         while (iter.next()) |entry| {
-            std.debug.print("iter.next()", .{});
             const value = entry.value_ptr.*;
-            try setupWorkingDir(allocator, value.workingdir, value.name);
+            std.debug.print("name={s}\n", .{value.name});
         }
     } else {
         std.debug.print("reloading config\n", .{});

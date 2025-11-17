@@ -30,7 +30,37 @@ const ReadYamlError = error{
     FailedRead,
 };
 
-pub var programs_map: StringHashMap(Program) = undefined;
+pub var programs_map: StringHashMap(*Program) = undefined;
+
+fn cloneProgram(allocator: Allocator, original: *const Program) !*Program {
+    const clone = try allocator.create(Program);
+    errdefer allocator.destroy(clone);
+    clone.* = original.*;
+
+    inline for (std.meta.fields(Program)) |field| {
+        if (field.type == []const u8 or field.type == []u8) {
+            const field_value = @field(original.*, field.name);
+            @field(clone, field.name) = try allocator.dupe(u8, field_value);
+            errdefer allocator.free(@field(clone, field.name));
+        }
+    }
+
+    return clone;
+}
+
+pub fn deinitPrograms(allocator: Allocator) void {
+    var iter = programs_map.iterator();
+    while (iter.next()) |entry| {
+        const value = entry.value_ptr.*;
+        inline for (std.meta.fields(Program)) |field| {
+            if (field.type == []const u8 or field.type == []u8) {
+                allocator.free(@field(value.*, field.name));
+            }
+        }
+        allocator.destroy(value);
+    }
+    programs_map.deinit();
+}
 
 /// return an allocated buffer of the file read by the given path.
 pub fn readYamlFile(allocator: Allocator, path: []const u8) ![]const u8 {
@@ -64,6 +94,7 @@ pub fn startParsing(allocator: Allocator, path: []const u8) !void {
     programs_map = .init(allocator);
     errdefer programs_map.deinit();
     for (result.programs) |program| {
-        try programs_map.put(program.name, program);
+        const clone = try cloneProgram(allocator, &program);
+        try programs_map.put(clone.name, clone);
     }
 }

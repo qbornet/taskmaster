@@ -55,6 +55,7 @@ pub fn main() !void {
         };
         if (exit) {
             allocator.free(line);
+            parser.deinitPrograms(allocator);
             break;
         }
         allocator.free(line);
