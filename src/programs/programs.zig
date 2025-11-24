@@ -10,6 +10,11 @@ const ProgramError = error {
     ProgramNotFound
 };
 
+pub const ProgramAction = struct {
+    result: bool,
+    thread_pool: []*std.Thread,
+};
+
 fn countSizeIterator(iter: *mem.TokenIterator(u8, .scalar)) usize {
     var size: usize = 0;
 
@@ -53,12 +58,17 @@ fn startProgram(line: []const u8, count: bool) !void {
     }
 }
 
-pub fn doProgramAction(allocator: Allocator, line: []const u8) !bool {
+pub fn doProgramAction(allocator: Allocator, line: []const u8) !*ProgramAction {
+    const program_action = try allocator.create(ProgramAction);
+    errdefer allocator.destroy(program_action);
+
+    program_action.result = false;
     const arg = std.os.argv[1];
     if (mem.eql(u8, line, "exit")) { 
-        return true;
+        program_action.result = true;
+        return program_action;
     }  else if (mem.eql(u8, line, "reload")) {
-        try conf.loadConfiguration(allocator, false);
+        program_action.thread_pool = try conf.loadConfiguration(allocator, false);
     } else if (mem.eql(u8, line, "status")) {
             const end = std.mem.indexOfSentinel(u8, 0, arg);
             const realpath = try std.fs.cwd().realpathAlloc(allocator, arg[0..end]);
@@ -73,6 +83,5 @@ pub fn doProgramAction(allocator: Allocator, line: []const u8) !bool {
     } else if (mem.startsWith(u8, line, "restart")) {
         try restartProgram(line);
     } 
-    return false;
-
+    return program_action;
 }

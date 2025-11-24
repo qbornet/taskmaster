@@ -4,11 +4,11 @@ const Allocator = std.mem.Allocator;
 const StringHashMap = std.StringHashMap;
 const gpa = std.heap.page_allocator;
 
-const Program = struct {
+pub const Program = struct {
     name: []const u8,
     cmd: []const u8,
     numprocs: u16,
-    umask: u16,
+    umask: []const u8,
     workingdir: []const u8,
     autostart: bool,
     autorestart: []const u8,

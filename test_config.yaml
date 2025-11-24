@@ -2,7 +2,7 @@ programs:
   - name: "nginx"
     cmd: "/usr/local/bin/nginx -c /etc/nginx/test.conf"
     numprocs: 1
-    umask: 022
+    umask: "022"
     workingdir: /tmp
     autostart: true
     autorestart: "unexpected"
@@ -17,7 +17,7 @@ programs:
   - name: "vogsphere"
     cmd: "/usr/local/bin/vogspehere-worker --no-prefork"
     numprocs: 8
-    umask: 077
+    umask: "077"
     workingdir: /tmp
     autostart: true
     autorestart: "unexpected"

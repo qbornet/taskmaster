@@ -4,11 +4,18 @@ const mem = std.mem;
 const parser = @import("parser/parser.zig");
 const reader = @import("reader/readline.zig");
 const conf = @import("programs/configuration.zig");
+const exec = @import("programs/execution.zig");
 const programs = @import("programs/programs.zig");
 
 const assert = std.debug.assert;
 const optimize = @import("builtin").mode;
 const Allocator = std.mem.Allocator;
+
+fn freeTaskmaster(allocator: Allocator, line: []const u8, thread_pool: []*std.Thread) void {
+    allocator.free(line);
+    parser.deinitPrograms(allocator);
+    exec.freeThreadExecution(allocator, thread_pool);
+}
 
 pub fn main() !void {
     const stdout = std.fs.File.stdout();
@@ -36,11 +43,11 @@ pub fn main() !void {
     const endIndex = std.mem.indexOfSentinel(u8, 0, std.os.argv[1]);
     const arg = std.os.argv[1][0..endIndex];
     try parser.startParsing(allocator, arg);
-    try conf.loadConfiguration(allocator, true);
+    const thread_pool = try conf.loadConfiguration(allocator, true);
     while (true) {
         const line = try reader.readLine(allocator, stdin);
         std.debug.print("line: '{s}'\n", .{line});
-        const exit = programs.doProgramAction(allocator, line) catch |err| blk: {
+        const program_action = programs.doProgramAction(allocator, line) catch |err| blk: {
             switch (err) {
                 error.HighTokenCount => std.debug.print("Too many program entry passed\n", .{}),
                 error.ProgramNotFound => {
@@ -51,11 +58,10 @@ pub fn main() !void {
                 },
                 else => std.debug.print("Unknown error: '{s}'", .{@errorName(err)}),
             }
-            break :blk false;
+            break :blk &programs.ProgramAction{ .result = false, .thread_pool = &.{}};
         };
-        if (exit) {
-            allocator.free(line);
-            parser.deinitPrograms(allocator);
+        if (program_action.result) {
+            freeTaskmaster(allocator, line, thread_pool);
             break;
         }
         allocator.free(line);
