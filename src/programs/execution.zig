@@ -3,6 +3,9 @@ const parser = @import("../parser/parser.zig");
 const posix = std.posix;
 const c = std.c;
 
+const ProcessProgram = @import("../lib/ProcessProgram.zig");
+const Worker = @import("../lib/Worker.zig");
+const Atomic = std.atomic.Value;
 const Program = parser.Program;
 const Allocator = std.mem.Allocator;
 const Child = std.process.Child;
@@ -10,11 +13,9 @@ const Child = std.process.Child;
 /// Needed because `startExecution()` error cannot be infered
 const StartExecutionError = error{} || std.fmt.ParseIntError ||  std.Thread.SpawnError || std.fs.File.OpenError || Allocator.Error || Child.SpawnError || Child.WaitError;
 
-
-//var exited_pid: std.AutoArrayHashMap(Child.Id, bool) = undefined;
-//var process_list: std.ArrayList(Child.Id) = .empty;
-//var child_map: std.StringArrayHashMap(*Child) = undefined;
-var finished_execution: bool = undefined;
+var process_program_map: std.StringArrayHashMap(*ProcessProgram) = undefined;
+var finished_execution: Atomic(bool) = .init(false);
+pub var thread_stop: Atomic(bool) = .init(false);
 
 
 fn setupWorkingDir(child: *Child, program: *Program) !void {
@@ -55,25 +56,20 @@ fn handleEndOfProcess(allocator: Allocator, term: Child.Term, program: *Program)
 }
 
 fn checkUpProcess(allocator: Allocator, program: *Program) !void {
-    while (!finished_execution) {}
-
-    while (true) {
-        for (0..process_list.items.len, process_list.items) |i, pid| {
-            const opt_val = exited_pid.get(pid);
-            if (opt_val != null and opt_val.?) {
-                _ = process_list.orderedRemove(i);
-                _ = exited_pid.orderedRemove(pid);
-                continue;
+    var index: usize = 0;
+    const opt_pp = process_program_map.get(program.name);
+    while (index < program.numprocs) : (index += 1) {
+        if (opt_pp) |pp| {
+            for (0..pp.getSizeProcessList(), pp.getProcessListItems()) |idx, pid| {
+                posix.kill(pid, 0) catch |err| switch (err) {
+                    error.PermissionDenied => std.debug.print("error: permission not allowed for process '{s}'\n", .{program.name}),
+                    error.ProcessNotFound => {
+                        pp.removePid(pid, idx);
+                        try startExecutionOne(allocator, program);
+                    },
+                    else => std.debug.print("error: unknown '{s}'", .{@errorName(err)}),
+                };
             }
-            posix.kill(pid, 0) catch |err| switch (err) {
-                error.PermissionDenied => std.debug.print("unsufficient permision to check process\n", .{}),
-                error.ProcessNotFound => {
-                    _ = process_list.orderedRemove(i);
-                    _ = exited_pid.orderedRemove(pid);
-                    try startExecutionOne(allocator, program);
-                },
-                else => std.debug.print("Thread check process received unknown: {s}\n", .{@errorName(err)}),
-            };
         }
     }
 }
@@ -84,10 +80,14 @@ fn startExecutionOne(allocator: Allocator, program: *Program) !void {
     const old_mask = c.umask(valid);
     defer _ = c.umask(old_mask);
 
+    const opt_pp = process_program_map.get(program.name);
+    if (opt_pp == null) return error.ProcessProgramNotFound;
+
+    const process_program = opt_pp.?;
     const command = try std.fmt.allocPrint(
         allocator,
         "{s} >> {s} 2>> {s}",
-        .{"envs", program.stdout, program.stderr}
+        .{"test_thread", program.stdout, program.stderr}
     );
 
     var child: *Child = try allocator.create(Child);
@@ -117,13 +117,19 @@ fn startExecutionOne(allocator: Allocator, program: *Program) !void {
         }
         return;
     };
-    if (child.id != 0) {
-        try process_list.append(allocator, child.id);
-        try exited_pid.put(child.id, true);
+    if (child.id == 0) {
+        try process_program.childAdd(child);
+        try process_program.pidAdd(child.id);
     }
+    try process_program_map.put(program.name, process_program);
 }
 
-pub fn freeThreadExecution(allocator: Allocator, thread_pool: []*std.Thread) void {
+pub fn freeProcessProgram() void {
+    process_program_map.deinit();
+}
+
+/// Free the `worker_pool` of the worker and the
+pub fn freeThreadExecution(allocator: Allocator, thread_pool: []*Worker) void {
     for (0..thread_pool.len) |index| {
         allocator.destroy(thread_pool[index]);
     }
@@ -131,8 +137,9 @@ pub fn freeThreadExecution(allocator: Allocator, thread_pool: []*std.Thread) voi
 
 }
 
-// this will handle all the file until the execution of the program.
-pub fn startExecution(allocator: Allocator, program: *Program) StartExecutionError!*std.Thread {
+/// Handle the execution of the program create the process and worker (thread) to,
+/// check if number of process are correct.
+pub fn startExecution(allocator: Allocator, program: *Program) StartExecutionError!*Worker{
     const valid = try std.fmt.parseInt(u16, program.umask, 8);
     const old_mask = c.umask(valid);
     defer _ = c.umask(old_mask);
@@ -143,29 +150,34 @@ pub fn startExecution(allocator: Allocator, program: *Program) StartExecutionErr
     const command = try std.fmt.allocPrint(
         allocator, 
         "{s} >> {s} 2>> {s}", 
-        .{"envs", program.stdout, program.stderr}
+        .{"test_thread", program.stdout, program.stderr}
     );
     defer allocator.free(command);
 
     std.debug.print("umask: {s}\n", .{program.umask});
-    var child = Child.init(&[_][]const u8{
+
+    var process_program: *ProcessProgram = try .init(allocator, program.name);
+    errdefer process_program.deinit();
+
+    process_program_map = .init(allocator);
+    errdefer process_program_map.deinit();
+
+    var child = try allocator.create(Child);
+    errdefer allocator.destroy(child);
+    child.* = Child.init(&[_][]const u8{
         "/usr/bin/env",
         "bash",
         "-c",
         command
     }, allocator);
 
-    finished_execution = false;
     child.stdin_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
     child.stdout_behavior = .Ignore;
-    try setupWorkingDir(&child, program);
+    try setupWorkingDir(child, program);
 
     var i: u16 = 0;
-    const thread: *std.Thread = try allocator.create(std.Thread);
-    errdefer allocator.destroy(thread);
-    thread.* = try std.Thread.spawn(.{ .allocator = allocator }, checkUpProcess, .{allocator, program});
-
+    const worker: *Worker = try .init(allocator, checkUpProcess, .{allocator, program});
     while (i < program.numprocs) : (i += 1) {
         child.spawn() catch |err| {
             if (err == error.FileNotFound) {
@@ -181,8 +193,11 @@ pub fn startExecution(allocator: Allocator, program: *Program) StartExecutionErr
             }
             continue;
         };
-        if (child.id != 0) try process_list.append(allocator, child.id);
+        if (child.id != 0) {
+            try process_program.pidAdd(child.id);
+            try process_program.childAdd(child);
+        }
     }
-    finished_execution = true;
-    return thread;
+    try process_program_map.put(program.name, process_program);
+    return worker;
 }

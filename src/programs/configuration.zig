@@ -2,31 +2,32 @@ const std = @import("std");
 const fmt = std.fmt;
 
 const Allocator = std.mem.Allocator;
+const Worker = @import("../lib/Worker.zig");
 const parser = @import("../parser/parser.zig");
 const exec = @import("execution.zig");
 
 
-pub fn loadConfiguration(allocator: Allocator, start_boot: bool) ![]*std.Thread {
+pub fn loadConfiguration(allocator: Allocator, start_boot: bool) ![]*Worker{
     if (start_boot) {
         var iter = parser.autostart_map.iterator();
         var index: usize = 0;
-        var thread_pool = try allocator.alloc(*std.Thread, iter.hm.capacity());
+        var worker_pool = try allocator.alloc(*Worker, iter.hm.capacity());
         errdefer {
             var i: usize = 0;
-            while (i < thread_pool.len) : (i += 1) {
-                allocator.destroy(thread_pool[i]);
+            while (i < worker_pool.len) : (i += 1) {
+                allocator.destroy(worker_pool[i]);
             }
-            allocator.free(thread_pool);
+            allocator.free(worker_pool);
         }
 
         while (iter.next()) |entry| {
             const value = entry.value_ptr.*;
             std.debug.print("program.name: {s}\n", .{value.name});
             const thread = try exec.startExecution(allocator, value);
-            thread_pool[index] = thread;
+            worker_pool[index] = thread;
             index += 1;
         }
-        return thread_pool;
+        return worker_pool;
     } else {
         std.debug.print("reloading config\n", .{});
         // should modif the behavior to have a comparaison done and change the programs, 

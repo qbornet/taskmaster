@@ -4,6 +4,7 @@ const parser = @import("../parser/parser.zig");
 const mem = std.mem;
 
 const Allocator = mem.Allocator;
+const Worker = @import("../lib/Worker.zig");
 
 const ProgramError = error {
     HighTokenCount,
@@ -12,7 +13,7 @@ const ProgramError = error {
 
 pub const ProgramAction = struct {
     result: bool,
-    thread_pool: []*std.Thread,
+    thread_pool: []*Worker,
 };
 
 fn countSizeIterator(iter: *mem.TokenIterator(u8, .scalar)) usize {
