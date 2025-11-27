@@ -4,23 +4,7 @@ const Allocator = std.mem.Allocator;
 const StringHashMap = std.StringHashMap;
 const gpa = std.heap.page_allocator;
 
-pub const Program = struct {
-    name: []const u8,
-    cmd: []const u8,
-    numprocs: u16,
-    umask: []const u8,
-    workingdir: []const u8,
-    autostart: bool,
-    autorestart: []const u8,
-    exitcodes:[]const u8,
-    startretries: u16,
-    starttime: u16,
-    stopsignal: []const u8,
-    stoptime: u16,
-    stdout: []const u8,
-    stderr: []const u8,
-    env: ?[]const u8
-};
+pub const Program = struct { name: []const u8, cmd: []const u8, numprocs: u16, umask: []const u8, workingdir: []const u8, autostart: bool, autorestart: []const u8, exitcodes: []const u8, startretries: u16, starttime: u16, stopsignal: []const u8, stoptime: u16, stdout: []const u8, stderr: []const u8, env: ?[]const u8 };
 
 const ProgramsYaml = struct {
     programs: []Program,

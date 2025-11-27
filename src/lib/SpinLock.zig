@@ -1,6 +1,5 @@
 /// This is a struct type SpinLock
 /// faster lock then mutex.
-
 const std = @import("std");
 
 const Thread = std.Thread;
@@ -12,7 +11,7 @@ value: AtomicState = AtomicState.init(.Unlocked),
 
 pub fn lock(self: *Self) void {
     while (true) {
-        switch(self.value.swap(.Locked, .acquire)) {
+        switch (self.value.swap(.Locked, .acquire)) {
             .Locked => {},
             .Unlocked => break,
         }

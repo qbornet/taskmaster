@@ -6,12 +6,11 @@ const Worker = @import("../lib/Worker.zig");
 const parser = @import("../parser/parser.zig");
 const exec = @import("execution.zig");
 
-
-pub fn loadConfiguration(allocator: Allocator, start_boot: bool) ![]*Worker{
+pub fn loadConfiguration(allocator: Allocator, start_boot: bool) ![]*Worker {
     if (start_boot) {
         var iter = parser.autostart_map.iterator();
         var index: usize = 0;
-        var worker_pool = try allocator.alloc(*Worker, iter.hm.capacity());
+        var worker_pool = try allocator.alloc(*Worker, iter.hm.size);
         errdefer {
             var i: usize = 0;
             while (i < worker_pool.len) : (i += 1) {
@@ -20,17 +19,18 @@ pub fn loadConfiguration(allocator: Allocator, start_boot: bool) ![]*Worker{
             allocator.free(worker_pool);
         }
 
+        std.debug.print("worker_pool.len: {d}\n", .{iter.hm.size});
         while (iter.next()) |entry| {
             const value = entry.value_ptr.*;
             std.debug.print("program.name: {s}\n", .{value.name});
-            const thread = try exec.startExecution(allocator, value);
-            worker_pool[index] = thread;
+            const worker = try exec.startExecution(allocator, value);
+            worker_pool[index] = worker;
             index += 1;
         }
         return worker_pool;
     } else {
         std.debug.print("reloading config\n", .{});
-        // should modif the behavior to have a comparaison done and change the programs, 
+        // should modif the behavior to have a comparaison done and change the programs,
         // according to the modification done so if for example autostart is set to false,
         // we need to remove the configuration that as the new autostart set to false by,
         // removing it from the autostart_map variable and setting it to the programs_map.

@@ -11,12 +11,11 @@ const Allocator = std.mem.Allocator;
 const Child = std.process.Child;
 
 /// Needed because `startExecution()` error cannot be infered
-const StartExecutionError = error{} || std.fmt.ParseIntError ||  std.Thread.SpawnError || std.fs.File.OpenError || Allocator.Error || Child.SpawnError || Child.WaitError;
+const StartExecutionError = error{} || std.fmt.ParseIntError || std.Thread.SpawnError || std.fs.File.OpenError || Allocator.Error || Child.SpawnError || Child.WaitError;
 
 var process_program_map: std.StringArrayHashMap(*ProcessProgram) = undefined;
 var finished_execution: Atomic(bool) = .init(false);
 pub var thread_stop: Atomic(bool) = .init(false);
-
 
 fn setupWorkingDir(child: *Child, program: *Program) !void {
     const dir = try std.fs.openDirAbsolute(program.workingdir, .{ .iterate = true });
@@ -29,7 +28,7 @@ fn checkExitCode(to_check: u8, program: *Program) !bool {
 
     while (iter.next()) |code| {
         const exit_code = try std.fmt.parseInt(u8, code, 10);
-        std.debug.print("checking: {d} exit_code: {d}\n", .{to_check, exit_code});
+        std.debug.print("checking: {d} exit_code: {d}\n", .{ to_check, exit_code });
         if (to_check == exit_code) return true;
     }
     return false;
@@ -37,10 +36,9 @@ fn checkExitCode(to_check: u8, program: *Program) !bool {
 
 fn handleEndOfProcess(allocator: Allocator, term: Child.Term, program: *Program) !void {
     return switch (term) {
-        .Exited  => |exit| {
+        .Exited => |exit| {
             std.debug.print("Exit result: {d}\n", .{exit});
-            if (try checkExitCode(exit, program) 
-                and std.mem.eql(u8, program.autorestart, "unexpected")) {
+            if (try checkExitCode(exit, program) and std.mem.eql(u8, program.autorestart, "unexpected")) {
                 var retries: u16 = 0;
                 while (retries < program.startretries) : (retries += 1) {
                     startExecution(allocator, program) catch {
@@ -57,7 +55,7 @@ fn handleEndOfProcess(allocator: Allocator, term: Child.Term, program: *Program)
 
 fn checkUpProcess(allocator: Allocator, program: *Program) !void {
     var index: usize = 0;
-    const opt_pp = process_program_map.get(program.name);
+    const opt_pp: ?*ProcessProgram = null;
     while (index < program.numprocs) : (index += 1) {
         if (opt_pp) |pp| {
             for (0..pp.getSizeProcessList(), pp.getProcessListItems()) |idx, pid| {
@@ -76,70 +74,34 @@ fn checkUpProcess(allocator: Allocator, program: *Program) !void {
 
 /// Used only by thread to execute missing procc
 fn startExecutionOne(allocator: Allocator, program: *Program) !void {
+    _ = allocator;
     const valid = try std.fmt.parseInt(u16, program.umask, 8);
     const old_mask = c.umask(valid);
     defer _ = c.umask(old_mask);
-
-    const opt_pp = process_program_map.get(program.name);
-    if (opt_pp == null) return error.ProcessProgramNotFound;
-
-    const process_program = opt_pp.?;
-    const command = try std.fmt.allocPrint(
-        allocator,
-        "{s} >> {s} 2>> {s}",
-        .{"test_thread", program.stdout, program.stderr}
-    );
-
-    var child: *Child = try allocator.create(Child);
-    errdefer allocator.destroy(child);
-    child.* = Child.init(&[_][]const u8{
-        "/usr/bin/env",
-        "bash",
-        "-c",
-        command
-    }, allocator);
-    child.stdin_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    try setupWorkingDir(child, program);
-
-    child.spawn() catch |err| {
-        if (err == error.FileNotFound) {
-            std.debug.print(
-                "error in service '{s}': invalid command use proper path.\n",
-                .{program.name}
-            );
-        } else {
-            std.debug.print(
-                "error in service '{s}': {s}\n",
-                .{program.name, @errorName(err)}
-            );
-        }
-        return;
-    };
-    if (child.id == 0) {
-        try process_program.childAdd(child);
-        try process_program.pidAdd(child.id);
-    }
-    try process_program_map.put(program.name, process_program);
+    std.debug.print("in executionOne", .{});
 }
 
 pub fn freeProcessProgram() void {
+    var iter = process_program_map.iterator();
+    while (iter.next()) |pp_to_free| {
+        pp_to_free.value_ptr.*.deinit();
+    }
     process_program_map.deinit();
 }
 
-/// Free the `worker_pool` of the worker and the
-pub fn freeThreadExecution(allocator: Allocator, thread_pool: []*Worker) void {
-    for (0..thread_pool.len) |index| {
-        allocator.destroy(thread_pool[index]);
+/// Free the `worker_pool` of the worker also kill the thread before freeing memory.
+pub fn freeThreadExecution(allocator: Allocator, worker_pool: []*Worker) void {
+    for (0..worker_pool.len) |index| {
+        const worker = worker_pool[index];
+        // this will call destroy for each worker and will wait until the thread leave properly.
+        worker.deinit();
     }
-    allocator.free(thread_pool);
-
+    allocator.free(worker_pool);
 }
 
 /// Handle the execution of the program create the process and worker (thread) to,
 /// check if number of process are correct.
-pub fn startExecution(allocator: Allocator, program: *Program) StartExecutionError!*Worker{
+pub fn startExecution(allocator: Allocator, program: *Program) StartExecutionError!*Worker {
     const valid = try std.fmt.parseInt(u16, program.umask, 8);
     const old_mask = c.umask(valid);
     defer _ = c.umask(old_mask);
@@ -147,57 +109,9 @@ pub fn startExecution(allocator: Allocator, program: *Program) StartExecutionErr
     // To handle the stdout, stderr as file we need a fix in the stdlib,
     // https://github.com/ziglang/zig/issues/22504
     // https://github.com/ziglang/zig/issues/23955
-    const command = try std.fmt.allocPrint(
-        allocator, 
-        "{s} >> {s} 2>> {s}", 
-        .{"test_thread", program.stdout, program.stderr}
-    );
-    defer allocator.free(command);
-
-    std.debug.print("umask: {s}\n", .{program.umask});
-
-    var process_program: *ProcessProgram = try .init(allocator, program.name);
-    errdefer process_program.deinit();
-
-    process_program_map = .init(allocator);
-    errdefer process_program_map.deinit();
-
-    var child = try allocator.create(Child);
-    errdefer allocator.destroy(child);
-    child.* = Child.init(&[_][]const u8{
-        "/usr/bin/env",
-        "bash",
-        "-c",
-        command
-    }, allocator);
-
-    child.stdin_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    try setupWorkingDir(child, program);
-
-    var i: u16 = 0;
-    const worker: *Worker = try .init(allocator, checkUpProcess, .{allocator, program});
-    while (i < program.numprocs) : (i += 1) {
-        child.spawn() catch |err| {
-            if (err == error.FileNotFound) {
-                std.debug.print(
-                    "error in service '{s}': invalid command use proper path.\n",
-                    .{program.name}
-                );
-            } else {
-                std.debug.print(
-                    "error in service '{s}': {s}\n",
-                    .{program.name, @errorName(err)}
-                );
-            }
-            continue;
-        };
-        if (child.id != 0) {
-            try process_program.pidAdd(child.id);
-            try process_program.childAdd(child);
-        }
-    }
-    try process_program_map.put(program.name, process_program);
+    std.debug.print("Creating thread...\n", .{});
+    const worker: *Worker = try .init(allocator, program.name, checkUpProcess, .{ allocator, program });
+    errdefer worker.deinit();
+    std.debug.print("Worker init: {*}\n", .{worker});
     return worker;
 }

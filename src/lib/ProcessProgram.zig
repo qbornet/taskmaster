@@ -1,13 +1,11 @@
 // This is a struct of type ProcessProgram
 const std = @import("std");
 
-
 const Program = @import("../parser/parser.zig").Program;
-const Child = std.process.Child; 
+const Child = std.process.Child;
 const Thread = std.Thread;
 const Allocator = std.mem.Allocator;
 const Self = @This();
-
 
 allocator: Allocator,
 
@@ -30,10 +28,9 @@ pub fn getExitedPid(self: *Self, pid: Child.Id) bool {
     return if (opt_val != null and opt_val.?) true else false;
 }
 
-
 /// remove all the pid for underlying data structures such as process_list and exited_pid_map
 pub fn removePid(self: *Self, pid: Child.Id, index_pid: usize) void {
-    self.*.lock.lock(); 
+    self.*.lock.lock();
     defer self.*.lock.unlock();
     var process_list = self.*.process_list;
     var exited_pid_map = self.*.exited_pid_map;
@@ -113,7 +110,6 @@ pub fn deinit(self: *Self) void {
         value.value_ptr.deinit(allocator);
         allocator.destroy(value.value_ptr);
     }
-
 
     // call deinit on each structure only child_map need to free the content.
     child_map.deinit();

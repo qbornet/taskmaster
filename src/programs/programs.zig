@@ -6,12 +6,10 @@ const mem = std.mem;
 const Allocator = mem.Allocator;
 const Worker = @import("../lib/Worker.zig");
 
-const ProgramError = error {
-    HighTokenCount,
-    ProgramNotFound
-};
+const ProgramError = error{ HighTokenCount, ProgramNotFound };
 
 pub const ProgramAction = struct {
+    allocator: ?Allocator,
     result: bool,
     thread_pool: []*Worker,
 };
@@ -62,27 +60,28 @@ fn startProgram(line: []const u8, count: bool) !void {
 pub fn doProgramAction(allocator: Allocator, line: []const u8) !*ProgramAction {
     const program_action = try allocator.create(ProgramAction);
     errdefer allocator.destroy(program_action);
+    program_action.*.allocator = allocator;
 
     program_action.result = false;
     const arg = std.os.argv[1];
-    if (mem.eql(u8, line, "exit")) { 
+    if (mem.eql(u8, line, "exit")) {
         program_action.result = true;
         return program_action;
-    }  else if (mem.eql(u8, line, "reload")) {
+    } else if (mem.eql(u8, line, "reload")) {
         program_action.thread_pool = try conf.loadConfiguration(allocator, false);
     } else if (mem.eql(u8, line, "status")) {
-            const end = std.mem.indexOfSentinel(u8, 0, arg);
-            const realpath = try std.fs.cwd().realpathAlloc(allocator, arg[0..end]);
-            defer allocator.free(realpath);
-            const result = try parser.readYamlFile(allocator, realpath);
-            defer allocator.free(result);
-            std.debug.print("{s}\n", .{result});
+        const end = std.mem.indexOfSentinel(u8, 0, arg);
+        const realpath = try std.fs.cwd().realpathAlloc(allocator, arg[0..end]);
+        defer allocator.free(realpath);
+        const result = try parser.readYamlFile(allocator, realpath);
+        defer allocator.free(result);
+        std.debug.print("{s}\n", .{result});
     } else if (mem.startsWith(u8, line, "start")) {
         try startProgram(line, true);
     } else if (mem.startsWith(u8, line, "stop")) {
         try stopProgram(line, true);
     } else if (mem.startsWith(u8, line, "restart")) {
         try restartProgram(line);
-    } 
+    }
     return program_action;
 }
