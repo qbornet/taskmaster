@@ -14,8 +14,6 @@ const Child = std.process.Child;
 const StartExecutionError = error{} || std.fmt.ParseIntError || std.Thread.SpawnError || std.fs.File.OpenError || Allocator.Error || Child.SpawnError || Child.WaitError;
 
 var process_program_map: std.StringArrayHashMap(*ProcessProgram) = undefined;
-var finished_execution: Atomic(bool) = .init(false);
-pub var thread_stop: Atomic(bool) = .init(false);
 
 fn setupWorkingDir(child: *Child, program: *Program) !void {
     const dir = try std.fs.openDirAbsolute(program.workingdir, .{ .iterate = true });

@@ -59,6 +59,13 @@ pub fn print(self: *Self, comptime fmt: []const u8, args: anytype) !void {
     try printer.flush();
 }
 
+/// Will print only inside file
+pub fn printFile(self: *Self, comptime fmt: []const u8, args: anytype) !void {
+    if (self.*.file_fs) |_| {
+        try self.*.file_printer.print(fmt, args);
+    }
+}
+
 /// Deinit the allocated resources and close the standard file.
 pub fn deinit(self: *Self) void {
     const allocator = self.*.allocator;
