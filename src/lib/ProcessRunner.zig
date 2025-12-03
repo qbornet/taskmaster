@@ -102,10 +102,8 @@ pub fn start(self: *Self,  program: *Program, exec: []const []const u8) !posix.p
         const err = posix.execvpeZ(argv[0].?, argv, envp);
         if (err) {
             std.debug.print("error: '{s}'\n", .{@errorName(err)});
-            const exitcodes = self.parseExitCodes(program.exitcodes);
-            defer allocator.free(exitcodes);
-            posix.exit(exitcodes[0]);
         }
+        posix.exit(0);
     } 
     // we are the parent
 
