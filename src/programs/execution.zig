@@ -3,6 +3,7 @@ const parser = @import("../parser/parser.zig");
 const posix = std.posix;
 const c = std.c;
 
+const ProcessRunner = @import("../lib/ProcessRunner.zig");
 const ProcessProgram = @import("../lib/ProcessProgram.zig");
 const Worker = @import("../lib/Worker.zig");
 const Atomic = std.atomic.Value;
@@ -12,6 +13,11 @@ const Child = std.process.Child;
 
 /// Needed because `startExecution()` error cannot be infered
 const StartExecutionError = error{} || std.fmt.ParseIntError || std.Thread.SpawnError || std.fs.File.OpenError || Allocator.Error || Child.SpawnError || Child.WaitError;
+
+pub const ExecutionResult = struct {
+    worker: *Worker,
+    validity_thread: *std.Thread,
+};
 
 var process_program_map: std.StringArrayHashMap(*ProcessProgram) = undefined;
 
@@ -87,29 +93,37 @@ pub fn freeProcessProgram() void {
     process_program_map.deinit();
 }
 
-/// Free the `worker_pool` of the worker also kill the thread before freeing memory.
-pub fn freeThreadExecution(allocator: Allocator, worker_pool: []*Worker) void {
-    for (0..worker_pool.len) |index| {
-        const worker = worker_pool[index];
-        // this will call destroy for each worker and will wait until the thread leave properly.
-        worker.deinit();
+/// Free the `execution_pool` this will clear the worker and the validity thread.
+pub fn freeExecutionPool(allocator: Allocator, execution_pool: []*ExecutionResult) void {
+    for (0..execution_pool.len) |index| {
+        const execution = execution_pool[index];
+        execution.worker.deinit();
+        allocator.destroy(execution.validity_thread);
+        allocator.destroy(execution);
     }
-    allocator.free(worker_pool);
+    allocator.free(execution_pool);
 }
 
 /// Handle the execution of the program create the process and worker (thread) to,
 /// check if number of process are correct.
-pub fn startExecution(allocator: Allocator, program: *Program) StartExecutionError!*Worker {
-    const valid = try std.fmt.parseInt(u16, program.umask, 8);
-    const old_mask = c.umask(valid);
-    defer _ = c.umask(old_mask);
+pub fn startExecution(allocator: Allocator, program: *Program) StartExecutionError!*ExecutionResult {
+    const execution_result: *ExecutionResult = try allocator.create(ExecutionResult);
+    errdefer allocator.destroy(execution_result);
 
-    // To handle the stdout, stderr as file we need a fix in the stdlib,
-    // https://github.com/ziglang/zig/issues/22504
-    // https://github.com/ziglang/zig/issues/23955
+    var tmp_array: std.ArrayList([]const u8) = .empty;
+    const runner: *ProcessRunner = try .init(allocator, program.stdout, program.stderr);
+    errdefer runner.deinit();
+
+    var iter = std.mem.splitScalar(u8, program.cmd, ' ');
+    while (iter.next()) |line| {
+        try tmp_array.append(allocator, line);
+    }
+    defer tmp_array.deinit(allocator);
+
+    const runner_thread = try runner.start(program, tmp_array.items);
     std.debug.print("Creating thread...\n", .{});
-    const worker: *Worker = try .init(allocator, program.name, checkUpProcess, .{ allocator, program });
-    errdefer worker.deinit();
-    std.debug.print("Worker init: {*}\n", .{worker});
-    return worker;
+    execution_result.validity_thread = runner_thread;
+    execution_result.worker = try .init(allocator, program.name, checkUpProcess, .{ allocator, program });
+    std.debug.print("Worker init: {*}\n", .{execution_result.worker});
+    return execution_result;
 }

@@ -67,6 +67,40 @@ pub fn readYamlFile(allocator: Allocator, path: []const u8) ![]const u8 {
     return if (ret != size) ReadYamlError.FailedRead else buffer;
 }
 
+/// return allocated ressources the caller need to free the return value.
+pub fn parseEnv(allocator: Allocator, opt_env: ?[]const u8) ![*:null]const ?[*:0]const u8 {
+    const sys_env_slice = std.os.environ;
+    var extra_size: usize = 0;
+    if (opt_env) |env_line| {
+        var iter = std.mem.splitScalar(u8, env_line, ',');
+        while (iter.next()) |_| : (extra_size += 1) {}
+    }
+    const total_len = extra_size + sys_env_slice.len;
+    const env = try allocator.allocSentinel(?[*:0]const u8, total_len, null);
+
+    var current_idx: usize = 0;
+    errdefer {
+        for (0..current_idx) |i| {
+            if (env[i]) |s| allocator.free(std.mem.span(s));
+        }
+        allocator.free(env);
+    }
+
+    for (sys_env_slice) |line| {
+        env[current_idx] = try allocator.dupeZ(u8, std.mem.span(line));
+        current_idx += 1;
+    }
+
+    if (opt_env) |line| {
+        var iter = std.mem.splitScalar(u8, line, ',');
+        while (iter.next()) |part| : (current_idx += 1) {
+            env[current_idx] = try allocator.dupeZ(u8, part);
+        }
+    }
+
+    return env;
+}
+
 pub fn startParsing(allocator: Allocator, path: []const u8) !void {
     const realpath = try std.fs.cwd().realpathAlloc(allocator, path);
     defer allocator.free(realpath);

@@ -1,5 +1,6 @@
 // This is a struct of type ProcessRunner
 const std = @import("std");
+const parseEnv = @import("../parser/parser.zig").parseEnv;
 const posix = std.posix;
 const fmt = std.fmt;
 
@@ -9,7 +10,10 @@ const Self = @This();
 
 allocator: Allocator,
 
-mutex: std.Thread.Mutex,
+
+mutex: *std.Thread.Mutex,
+
+pid: posix.pid_t,
 
 stdout_file: std.fs.File,
 stdout_path: []const u8,
@@ -23,7 +27,7 @@ pub fn init(allocator: Allocator, stdout_path: []const u8, stderr_path: []const 
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
     self.*.allocator = allocator;
-    self.*.mutex = .{};
+    self.*.mutex = try allocator.create(std.Thread.Mutex);
     self.*.stdout_path = try allocator.dupe(u8, stdout_path);
     self.*.stderr_path = try allocator.dupe(u8, stderr_path);
     return self;
@@ -45,42 +49,61 @@ fn parseExitCodes(self: *Self, exitcodes: []const u8) ![]u16 {
     return exitcode_result;
 }
 
-fn fileExistStdout(self: *Self) !bool {
-    self.*.stdout_file = std.fs.createFileAbsolute(self.*.stdout_path) catch |err| switch (err) {
+fn fileExistStdout(self: *Self) bool {
+    self.*.stdout_file = std.fs.createFileAbsolute(self.*.stdout_path, .{}) catch |err| switch (err) {
         error.PathAlreadyExists => {
             std.debug.print("error: '{s}' log file already exist\n", .{self.*.stderr_path});
             return true;
         },
-        else => return err,
+        else => return true,
     };
     return false;
 }
 
-fn fileExistStderr(self: *Self) !bool {
+fn fileExistStderr(self: *Self) bool {
     self.*.stderr_file = std.fs.createFileAbsolute(self.*.stderr_path, .{}) catch |err| switch (err) {
         error.PathAlreadyExists => {
             std.debug.print("error: '{s}' log file already exist\n", .{self.*.stderr_path});
             return true;
         },
-        else => return err,
+        else => return true,
     };
     return false;
 }
 
+fn processRunnerValid(pid: posix.pid_t, second: usize) !void {
+    const timer = std.time.ns_per_s * second; 
+    std.Thread.sleep(timer);
+
+    posix.kill(pid, 0) catch |err| switch (err) {
+        error.PermissionDenied => std.debug.print("Unsufficant Permission not allowed to check process\n", .{}),
+        error.ProcessNotFound => std.debug.print("Unable to find [{d}] pid\n", .{pid}),
+        else => @panic("unknown error when checking process\n"),
+    };
+}
+
 /// start execution of command and return pid.
-pub fn start(self: *Self,  program: *Program, exec: []const []const u8) !posix.pid_t {
+pub fn start(self: *Self,  program: *Program, exec: []const []const u8) !*std.Thread {
     const allocator = self.*.allocator;
     const mutex = self.*.mutex;
 
-    const envp = std.os.environ;
+    const umask = try std.fmt.parseInt(u16, program.umask, 8);
     const argv = try allocator.allocSentinel(?[*:0]const u8, exec.len, null);
     defer allocator.free(argv);
     for (0..exec.len, exec) |i, line| argv[i] = try allocator.dupeZ(u8, line);
     defer for (exec) |line| {
         allocator.free(line);
     };
+    const env = try parseEnv(allocator, program.env);
+    defer {
+        const slice = std.mem.span(env);
+        for (slice) |item| {
+            if (item) |s| allocator.free(std.mem.span(s));
+        }
+        allocator.free(slice);
+    }
 
-    const old_umask = std.c.umask(program.umask);
+    const old_umask = std.c.umask(umask);
     defer _ = std.c.umask(old_umask);
 
     const pid = try posix.fork();
@@ -97,21 +120,23 @@ pub fn start(self: *Self,  program: *Program, exec: []const []const u8) !posix.p
         posix.close(self.*.stderr_file.handle);
 
         try posix.chdir(program.workingdir);
-
-
-        const err = posix.execvpeZ(argv[0].?, argv, envp);
-        if (err) {
-            std.debug.print("error: '{s}'\n", .{@errorName(err)});
+        const err = posix.execvpeZ(argv[0].?, argv, env);
+        switch (err) {
+            else => std.debug.print("error: '{s}'\n", .{@errorName(err)}),
         }
         posix.exit(0);
     } 
     // we are the parent
+    
+    self.*.pid = pid;
 
-    // here we return the pid the wait function is done by the thread,
-    // for each program run by taskmaster. 
-    // Why ? Because each thread are here to maintain the numprocs provided in config,
-    // thus making them important to call for wait to check if process death is unexpected or not.
-    return pid;
+    // We create a thread here to check if the start of the process is valid or not,
+    // this will impact the thread that check if the process is up or not.
+    const thread: *std.Thread = try allocator.create(std.Thread);
+    errdefer allocator.destroy(thread);
+
+    thread.* = try std.Thread.spawn(.{}, processRunnerValid, .{ pid, program.starttime });
+    return thread;
 }
 
 /// Destroy ProcessRunner struct `release` all allocated resources
@@ -119,6 +144,7 @@ pub fn deinit(self: *Self) void {
     const allocator = self.*.allocator;
     allocator.free(self.*.stdout_path);
     allocator.free(self.*.stderr_path);
+    allocator.destroy(self.*.mutex);
     allocator.destroy(self);
     self.* = undefined;
 }

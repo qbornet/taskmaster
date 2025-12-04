@@ -12,12 +12,12 @@ const optimize = @import("builtin").mode;
 const Printer = @import("lib/Printer.zig");
 const Allocator = std.mem.Allocator;
 
-fn freeTaskmaster(allocator: Allocator, line: []const u8, worker_pool: []*std.Thread) void {
+fn freeTaskmaster(allocator: Allocator, line: []const u8, execution_pool: []*exec.ExecutionResult) void {
     std.debug.print("freeing line\n", .{});
     allocator.free(line);
     // exec.freeProcessProgram();
     std.debug.print("freeing thread execution\n", .{});
-    exec.freeThreadExecution(allocator, worker_pool);
+    exec.freeExecutionPool(allocator, execution_pool);
     std.debug.print("freeing parser programs_map and autostart_map\n", .{});
     parser.deinitPrograms(allocator);
     std.debug.print("finished freeing\n", .{});
@@ -61,9 +61,11 @@ pub fn main() !void {
     try stdout.print("Starting taskmaster...\n", .{});
     const arg = returnArg();
     try parser.startParsing(allocator, arg);
-    const worker_pool = try conf.loadConfiguration(allocator, true);
-    for (0..worker_pool.len, worker_pool) |i, worker| {
-        std.debug.print("[{d}]: worker: {*}\n", .{ i, worker });
+    const execution_pool = try conf.loadConfiguration(allocator, true);
+    for (0..execution_pool.len, execution_pool) |i, execution| {
+        std.debug.print("[{d}]: worker: {*}\n", .{ i, execution.worker });
+        std.debug.print("[{d}]: validity_thread: {*}\n", .{ i, execution.validity_thread });
+        execution.validity_thread.join();
     }
     while (true) {
         const line = try reader.readLine(allocator, stdin);
@@ -83,7 +85,7 @@ pub fn main() !void {
         };
         if (program_action.result) {
             if (program_action.allocator != null) allocator.destroy(program_action);
-            freeTaskmaster(allocator, line, worker_pool);
+            freeTaskmaster(allocator, line, execution_pool);
             break;
         }
         if (program_action.allocator != null) {
