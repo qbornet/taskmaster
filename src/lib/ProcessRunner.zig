@@ -5,6 +5,7 @@ const posix = std.posix;
 const fmt = std.fmt;
 
 const Allocator = std.mem.Allocator;
+const ProcessProgram = @import("ProcessProgram.zig");
 const Program = @import("../parser/parser.zig").Program;
 const Self = @This();
 
@@ -71,7 +72,7 @@ fn fileExistStderr(self: *Self) bool {
     return false;
 }
 
-fn processRunnerValid(pid: posix.pid_t, second: usize) !void {
+fn processRunnerValid(pid: posix.pid_t, second: usize, process_program: *ProcessProgram) !void {
     const timer = std.time.ns_per_s * second; 
     std.Thread.sleep(timer);
 
@@ -80,20 +81,24 @@ fn processRunnerValid(pid: posix.pid_t, second: usize) !void {
         error.ProcessNotFound => std.debug.print("Unable to find [{d}] pid\n", .{pid}),
         else => @panic("unknown error when checking process\n"),
     };
+    try process_program.pidAdd(pid);
 }
 
 /// start execution of command and return pid.
-pub fn start(self: *Self,  program: *Program, exec: []const []const u8) !*std.Thread {
+pub fn start(self: *Self,  program: *Program, exec: []const []const u8, process_program: *ProcessProgram) !*std.Thread {
     const allocator = self.*.allocator;
     const mutex = self.*.mutex;
-
     const umask = try std.fmt.parseInt(u16, program.umask, 8);
     const argv = try allocator.allocSentinel(?[*:0]const u8, exec.len, null);
     defer allocator.free(argv);
+
     for (0..exec.len, exec) |i, line| argv[i] = try allocator.dupeZ(u8, line);
-    defer for (exec) |line| {
-        allocator.free(line);
-    };
+    defer {
+        for (argv) |opt_line| {
+            if (opt_line) |line| allocator.free(std.mem.span(line));
+        }
+    }
+
     const env = try parseEnv(allocator, program.env);
     defer {
         const slice = std.mem.span(env);
@@ -122,7 +127,7 @@ pub fn start(self: *Self,  program: *Program, exec: []const []const u8) !*std.Th
         try posix.chdir(program.workingdir);
         const err = posix.execvpeZ(argv[0].?, argv, env);
         switch (err) {
-            else => std.debug.print("error: '{s}'\n", .{@errorName(err)}),
+            else => std.debug.print("posix.execvpeZ error: '{s}'\n", .{@errorName(err)}),
         }
         posix.exit(0);
     } 
@@ -135,15 +140,17 @@ pub fn start(self: *Self,  program: *Program, exec: []const []const u8) !*std.Th
     const thread: *std.Thread = try allocator.create(std.Thread);
     errdefer allocator.destroy(thread);
 
-    thread.* = try std.Thread.spawn(.{}, processRunnerValid, .{ pid, program.starttime });
+    thread.* = try std.Thread.spawn(.{}, processRunnerValid, .{ pid, program.starttime, process_program });
     return thread;
 }
 
 /// Destroy ProcessRunner struct `release` all allocated resources
 pub fn deinit(self: *Self) void {
     const allocator = self.*.allocator;
+    self.*.mutex.lock();
     allocator.free(self.*.stdout_path);
     allocator.free(self.*.stderr_path);
+    self.*.mutex.unlock();
     allocator.destroy(self.*.mutex);
     allocator.destroy(self);
     self.* = undefined;

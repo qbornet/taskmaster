@@ -12,14 +12,16 @@ const Allocator = std.mem.Allocator;
 const Child = std.process.Child;
 
 /// Needed because `startExecution()` error cannot be infered
-const StartExecutionError = error{} || std.fmt.ParseIntError || std.Thread.SpawnError || std.fs.File.OpenError || Allocator.Error || Child.SpawnError || Child.WaitError;
+const StartExecutionError = error{
+    NoProcessProgramFound
+} || std.fmt.ParseIntError || std.Thread.SpawnError || std.fs.File.OpenError || Allocator.Error || Child.SpawnError || Child.WaitError;
 
 pub const ExecutionResult = struct {
     worker: *Worker,
     validity_thread: *std.Thread,
 };
 
-var process_program_map: std.StringArrayHashMap(*ProcessProgram) = undefined;
+pub var process_program_map: std.StringArrayHashMap(*ProcessProgram) = undefined;
 
 fn setupWorkingDir(child: *Child, program: *Program) !void {
     const dir = try std.fs.openDirAbsolute(program.workingdir, .{ .iterate = true });
@@ -109,19 +111,27 @@ pub fn freeExecutionPool(allocator: Allocator, execution_pool: []*ExecutionResul
 pub fn startExecution(allocator: Allocator, program: *Program) StartExecutionError!*ExecutionResult {
     const execution_result: *ExecutionResult = try allocator.create(ExecutionResult);
     errdefer allocator.destroy(execution_result);
+    var process_program: *ProcessProgram = undefined; 
 
+    const opt_pp = process_program_map.get(program.name);
+    process_program = if (opt_pp) |pp| pp else try .init(allocator, program.name);
+    std.debug.print("process_program={*}\n", .{process_program});
+
+    try process_program_map.put(program.name, process_program);
     var tmp_array: std.ArrayList([]const u8) = .empty;
     const runner: *ProcessRunner = try .init(allocator, program.stdout, program.stderr);
-    errdefer runner.deinit();
+    defer runner.deinit();
 
-    var iter = std.mem.splitScalar(u8, program.cmd, ' ');
-    while (iter.next()) |line| {
+    std.debug.print("before: {s}\n", .{program.cmd});
+    var iter_split = std.mem.splitScalar(u8, program.cmd, ' ');
+    while (iter_split.next()) |line| {
         try tmp_array.append(allocator, line);
     }
     defer tmp_array.deinit(allocator);
 
-    const runner_thread = try runner.start(program, tmp_array.items);
+    const runner_thread = try runner.start(program, tmp_array.items, process_program);
     std.debug.print("Creating thread...\n", .{});
+    std.debug.print("Creating runner_thread...\n", .{});
     execution_result.validity_thread = runner_thread;
     execution_result.worker = try .init(allocator, program.name, checkUpProcess, .{ allocator, program });
     std.debug.print("Worker init: {*}\n", .{execution_result.worker});

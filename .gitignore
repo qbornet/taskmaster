@@ -1,5 +1,6 @@
 # debug file
 debug.log
+logger.log
 
 # vim swap
 *.sw?

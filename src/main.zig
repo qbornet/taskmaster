@@ -18,6 +18,8 @@ fn freeTaskmaster(allocator: Allocator, line: []const u8, execution_pool: []*exe
     // exec.freeProcessProgram();
     std.debug.print("freeing thread execution\n", .{});
     exec.freeExecutionPool(allocator, execution_pool);
+    std.debug.print("freeing process program\n", .{});
+    exec.freeProcessProgram();
     std.debug.print("freeing parser programs_map and autostart_map\n", .{});
     parser.deinitPrograms(allocator);
     std.debug.print("finished freeing\n", .{});
@@ -61,6 +63,8 @@ pub fn main() !void {
     try stdout.print("Starting taskmaster...\n", .{});
     const arg = returnArg();
     try parser.startParsing(allocator, arg);
+    exec.process_program_map = .init(allocator);
+    std.debug.print("loading configuration\n", .{});
     const execution_pool = try conf.loadConfiguration(allocator, true);
     for (0..execution_pool.len, execution_pool) |i, execution| {
         std.debug.print("[{d}]: worker: {*}\n", .{ i, execution.worker });

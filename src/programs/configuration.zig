@@ -25,7 +25,15 @@ pub fn loadConfiguration(allocator: Allocator, start_boot: bool) ![]*exec.Execut
         while (iter.next()) |entry| {
             const value = entry.value_ptr.*;
             std.debug.print("program.name: {s}\n", .{value.name});
-            const execution_result = try exec.startExecution(allocator, value);
+            const execution_result = exec.startExecution(allocator, value) catch |err| {
+                switch (err) {
+                    error.NoProcessProgramFound => std.debug.print("process_program not found\n", .{}),
+                    else => std.debug.print("error for execution: {s}\n", .{@errorName(err)}),
+                }
+                std.debug.print("error found execution done\n", .{});
+                return err;
+            };
+            std.debug.print("[{d}]: {*}\n", .{index, execution_result});
             execution_pool[index] = execution_result;
             index += 1;
         }

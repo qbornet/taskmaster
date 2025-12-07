@@ -1,6 +1,6 @@
 programs:
   - name: "nginx"
-    cmd: "/usr/local/bin/nginx -c /etc/nginx/test.conf"
+    cmd: "/home/qbornet/.local/bin/test_thread"
     numprocs: 1
     umask: "022"
     workingdir: /tmp
@@ -15,7 +15,7 @@ programs:
     stderr: /tmp/nginx.stderr
     env: "STARTED_BY=taskmaster,ANSWERED=42"
   - name: "vogsphere"
-    cmd: "/usr/local/bin/vogspehere-worker --no-prefork"
+    cmd: "/home/qbornet/.local/bin/test_thread"
     numprocs: 8
     umask: "077"
     workingdir: /tmp
