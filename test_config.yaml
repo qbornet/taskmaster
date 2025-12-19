@@ -1,11 +1,11 @@
 programs:
   - name: "nginx"
-    cmd: "/home/qbornet/.local/bin/test_thread"
+    cmd: "/home/qbornet/.local/bin/test_exit"
     numprocs: 1
     umask: "022"
     workingdir: /tmp
     autostart: true
-    autorestart: "unexpected"
+    autorestart: "always"
     exitcodes: "0,2"
     startretries: 3
     starttime: 5

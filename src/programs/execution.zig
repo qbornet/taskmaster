@@ -19,74 +19,189 @@ const StartExecutionError = error{
 pub const ExecutionResult = struct {
     worker: *Worker,
     validity_thread: *std.Thread,
+    program: *Program,
+    process_runner: *ProcessRunner,
 };
 
-pub var process_program_map: std.StringArrayHashMap(*ProcessProgram) = undefined;
+pub var process_program_map: std.StringArrayHashMap(*ProcessProgram) = .init(std.heap.page_allocator);
 
-fn setupWorkingDir(child: *Child, program: *Program) !void {
-    const dir = try std.fs.openDirAbsolute(program.workingdir, .{ .iterate = true });
-    child.cwd = program.workingdir;
-    child.cwd_dir = dir;
-}
 
-fn checkExitCode(to_check: u8, program: *Program) !bool {
+fn checkExitCodes(status: u32, program: *Program, pp: *ProcessProgram) !void {
+    const restart_policies_never = std.mem.eql(u8, program.autorestart, "never");
+    const restart_policies_always = std.mem.eql(u8, program.autorestart, "always");
+    if (restart_policies_always) {
+        return;
+    } else if (pp.getRestarting() and restart_policies_never) {
+        pp.stopRestarting();
+        return;
+    } else if (restart_policies_never) return;
+
     var iter = std.mem.splitScalar(u8, program.exitcodes, ',');
-
-    while (iter.next()) |code| {
-        const exit_code = try std.fmt.parseInt(u8, code, 10);
-        std.debug.print("checking: {d} exit_code: {d}\n", .{ to_check, exit_code });
-        if (to_check == exit_code) return true;
-    }
-    return false;
-}
-
-fn handleEndOfProcess(allocator: Allocator, term: Child.Term, program: *Program) !void {
-    return switch (term) {
-        .Exited => |exit| {
-            std.debug.print("Exit result: {d}\n", .{exit});
-            if (try checkExitCode(exit, program) and std.mem.eql(u8, program.autorestart, "unexpected")) {
-                var retries: u16 = 0;
-                while (retries < program.startretries) : (retries += 1) {
-                    startExecution(allocator, program) catch {
-                        std.debug.print("service '{s}' trying to restart...", .{program.name});
-                    };
-                }
-            }
-        },
-        .Signal => |sig| std.debug.print("Signal received: {d}\n", .{sig}),
-        .Stopped => |stop| std.debug.print("Stopped: {d}\n", .{stop}),
-        .Unknown => |unknown| std.debug.print("Unknown: {d}\n", .{unknown}),
-    };
-}
-
-fn checkUpProcess(allocator: Allocator, program: *Program) !void {
-    var index: usize = 0;
-    const opt_pp: ?*ProcessProgram = null;
-    while (index < program.numprocs) : (index += 1) {
-        if (opt_pp) |pp| {
-            for (0..pp.getSizeProcessList(), pp.getProcessListItems()) |idx, pid| {
-                posix.kill(pid, 0) catch |err| switch (err) {
-                    error.PermissionDenied => std.debug.print("error: permission not allowed for process '{s}'\n", .{program.name}),
-                    error.ProcessNotFound => {
-                        pp.removePid(pid, idx);
-                        try startExecutionOne(allocator, program);
-                    },
-                    else => std.debug.print("error: unknown '{s}'", .{@errorName(err)}),
-                };
-            }
+    while (iter.next()) |exit_code_ascii| {
+        const exit_code = try std.fmt.parseInt(u8, exit_code_ascii, 10);
+        if (exit_code == status) {
+            pp.stopRestarting();
         }
     }
 }
 
-/// Used only by thread to execute missing procc
-fn startExecutionOne(allocator: Allocator, program: *Program) !void {
-    _ = allocator;
-    const valid = try std.fmt.parseInt(u16, program.umask, 8);
-    const old_mask = c.umask(valid);
-    defer _ = c.umask(old_mask);
-    std.debug.print("in executionOne", .{});
+/// Use to check process if they are alive and start new one if they are not.
+pub fn checkUpProcess(allocator: Allocator, program: *Program) !void {
+    const opt_pp: ?*ProcessProgram = process_program_map.get(program.name);
+    if (opt_pp) |pp| {
+        std.debug.print("checking: '{s}'\n", .{program.name});
+        for (0.., pp.getProcessList().items) |idx, pid| {
+            std.debug.print("checkup [{d}]: {d}\n", .{idx, pid});
+        }
+        for (0.., pp.getProcessList().items) |idx, pid| {
+            const ret = posix.waitpid(pid, 1);
+            if (ret.pid > 0) _ = try checkExitCodes(ret.status, program, pp);
+            posix.kill(pid, 0) catch |err| switch (err) {
+                error.PermissionDenied => std.debug.print("error: permission not allowed for process '{s}'\n", .{program.name}),
+                error.ProcessNotFound => {
+                    pp.pidListRemove(idx, null);
+                    if (pp.getRestarting()) {
+                        _ = pp.pidMapRemove(pid);
+                        var i: usize = 0;
+                        var execution_result: *ExecutionResult = undefined;
+                        while (i < program.startretries) : (i += 1) {
+                            execution_result = try startExecution(allocator, program);
+                            execution_result.validity_thread.join();
+                            if (!execution_result.process_runner.getProcessValidity()) {
+                                execution_result.process_runner.deinit();
+                                allocator.destroy(execution_result.validity_thread);
+                                allocator.destroy(execution_result);
+                                continue;
+                            } else break;
+                        }
+                        execution_result.process_runner.deinit();
+                        allocator.destroy(execution_result.validity_thread);
+                        allocator.destroy(execution_result);
+                        if (i == program.startretries) pp.stopRestarting();
+                    }
+                    continue;
+                },
+                else => std.debug.print("error: unknown '{s}'", .{@errorName(err)}),
+            };
+        }
+    }
 }
 
+/// Check if process is alive all the available process are alive.
+fn checkAlive(program: *Program) !usize {
+    var count: usize = 0;
+    const opt_pp = process_program_map.get(program.name);
+    if (opt_pp) |process_program| {
+        var to_remove: std.ArrayList(usize) = .empty;
+        const allocator = process_program.allocator;
+        errdefer to_remove.deinit(allocator);
+
+        process_program.mutex.lock();
+        const process_list = process_program.getProcessList();
+        const slices = process_list.items;
+        for (0..process_program.getSizeProcessList(), slices) |i, pid| {
+            posix.kill(pid, 0) catch |err| switch (err) {
+                error.PermissionDenied => std.debug.print("Unsufficent Permission not allowed to check process\n", .{}),
+                error.ProcessNotFound => {
+                    std.debug.print("pid: {d} is dead\n", .{pid});
+                    try to_remove.append(allocator, i);
+                    process_program.mutex.unlock();
+                    const opt_exited = process_program.pidCheck(pid);
+                    process_program.mutex.lock();
+                    if (opt_exited != null and opt_exited.?) {
+                        process_program.mutex.unlock();
+                        _ = process_program.pidMapRemove(pid);
+                        process_program.mutex.lock();
+                    }
+                },
+                else => @panic("unknown error when communicating to process")
+            };
+        }
+        count += to_remove.items.len;
+        process_program.mutex.unlock();
+        process_program.pidListRemove(null, to_remove.items);
+        to_remove.deinit(allocator);
+    }
+    return count;
+}
+
+/// Send the signal link to the `program.stopsignal`
+fn sendSignal(program: *Program) !void {
+    const opt_pp = process_program_map.get(program.name);
+    const sig = parser.getSignal(program.stopsignal) catch |err| switch (err) {
+        error.SignalNotFound => {
+            std.debug.print("Signal you passed is not POSIX\n", .{});
+            return err;
+        },
+    };
+    if (opt_pp) |process_program| {
+        process_program.mutex.lock();
+        const process_list = process_program.getProcessList();
+        const slices = process_list.items;
+        for (0..slices.len, slices) |i, pid| {
+            std.debug.print("[{d}] send signal pid: {d}\n", .{i, pid});
+        }
+        for (0..process_program.getSizeProcessList(), slices) |_, pid| {
+            posix.kill(pid, sig) catch |err| switch (err) {
+                error.PermissionDenied => std.debug.print("Unsufficent Permission", .{}),
+                error.ProcessNotFound => {
+                    std.debug.print("pid: unable to found '{d}'\n", .{pid});
+                    continue;
+                },
+                else => @panic("unknown error when communicating to process")
+            };
+            process_program.mutex.unlock();
+            try process_program.pidExit(pid);
+            process_program.mutex.lock();
+            _ = posix.waitpid(pid, 0);
+        }
+        process_program.mutex.unlock();
+    }
+}
+
+/// Exit properly the process running if the process didn't exit then,
+/// force terminating with SIGKILL.
+pub fn exitCleanly(program: *Program) !void {
+    const time_sleep: usize = std.time.ns_per_s*@as(usize, @intCast(program.stoptime));
+    _ = try checkAlive(program);
+    try sendSignal(program);
+    std.Thread.sleep(time_sleep);
+
+    const dead_process = try checkAlive(program);
+    std.debug.print("dead_process: {d} numprocs: {d}\n", .{dead_process, program.numprocs});
+    if ((program.numprocs - dead_process) == 0) {
+        return;
+    }
+    const opt_pp = process_program_map.get(program.name);
+    if (opt_pp) |process_program| {
+        const allocator = std.heap.page_allocator;
+        var pids_removes: std.ArrayList(usize) =  .empty;
+        defer pids_removes.deinit(allocator);
+
+        process_program.mutex.lock();
+        const process_list = process_program.getProcessList().items;
+        for (0.., process_list) |i, pid| {
+            std.debug.print("[{d}]: {d}\n", .{i, pid});
+            posix.kill(pid, 9) catch |err| switch (err) {
+                error.PermissionDenied => std.debug.print("Unsufficent Permission", .{}),
+                error.ProcessNotFound => {
+                    std.debug.print("error: pid: '{d}'\n", .{pid});
+                    @panic("error: Process Not Found");
+                },
+                else => @panic("unknown error when communicating to process")
+            };
+            process_program.mutex.unlock();
+            try pids_removes.append(allocator, i);
+            _ = process_program.pidMapRemove(pid);
+            process_program.mutex.lock();
+            _ = posix.waitpid(pid, 0);
+        }
+        process_program.mutex.unlock();
+        process_program.pidListRemove(null, pids_removes.items);
+    }
+}
+
+/// Free the `process_program_map` and is content
 pub fn freeProcessProgram() void {
     var iter = process_program_map.iterator();
     while (iter.next()) |pp_to_free| {
@@ -109,10 +224,10 @@ pub fn freeExecutionPool(allocator: Allocator, execution_pool: []*ExecutionResul
 /// Handle the execution of the program create the process and worker (thread) to,
 /// check if number of process are correct.
 pub fn startExecution(allocator: Allocator, program: *Program) StartExecutionError!*ExecutionResult {
-    const execution_result: *ExecutionResult = try allocator.create(ExecutionResult);
-    errdefer allocator.destroy(execution_result);
+    const execution_result = try allocator.create(ExecutionResult);
     var process_program: *ProcessProgram = undefined; 
 
+    std.debug.print("program: {*} pp_map: {*} \n", .{program, &process_program_map});
     const opt_pp = process_program_map.get(program.name);
     process_program = if (opt_pp) |pp| pp else try .init(allocator, program.name);
     std.debug.print("process_program={*}\n", .{process_program});
@@ -120,7 +235,6 @@ pub fn startExecution(allocator: Allocator, program: *Program) StartExecutionErr
     try process_program_map.put(program.name, process_program);
     var tmp_array: std.ArrayList([]const u8) = .empty;
     const runner: *ProcessRunner = try .init(allocator, program.stdout, program.stderr);
-    defer runner.deinit();
 
     std.debug.print("before: {s}\n", .{program.cmd});
     var iter_split = std.mem.splitScalar(u8, program.cmd, ' ');
@@ -130,10 +244,9 @@ pub fn startExecution(allocator: Allocator, program: *Program) StartExecutionErr
     defer tmp_array.deinit(allocator);
 
     const runner_thread = try runner.start(program, tmp_array.items, process_program);
-    std.debug.print("Creating thread...\n", .{});
-    std.debug.print("Creating runner_thread...\n", .{});
+    std.debug.print("Creating validity_thread...\n", .{});
+    execution_result.program = program;
     execution_result.validity_thread = runner_thread;
-    execution_result.worker = try .init(allocator, program.name, checkUpProcess, .{ allocator, program });
-    std.debug.print("Worker init: {*}\n", .{execution_result.worker});
+    execution_result.process_runner = runner;
     return execution_result;
 }

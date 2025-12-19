@@ -9,10 +9,6 @@ const pid_t = std.os.linux.pid_t;
 
 allocator: Allocator,
 
-mutex: Mutex,
-
-pid_list: std.ArrayList(std.os.linux.pid_t),
-
 should_stop: Atomic(bool),
 
 thread: Thread,
@@ -34,9 +30,7 @@ pub fn init(allocator: Allocator, service: []const u8, function: anytype, args: 
     self.*.allocator = allocator;
     self.*.should_stop = Atomic(bool).init(false);
     self.*.thread_service = try allocator.dupe(u8, service);
-    self.*.mutex = .{};
     self.*.thread = try Thread.spawn(.{ .allocator = allocator }, workerLoop, .{ self, function, args });
-    self.*.pid_list = .empty;
     return self;
 }
 
@@ -46,22 +40,6 @@ pub fn stop(self: *Self) void {
     std.debug.print("should_stop: {} service: '{s}'\n", .{ val, self.*.thread_service });
     self.thread.join();
 }
-
-/// Append a pid to the `pid_list` (thread_safe).
-pub fn addPidToList(self: *Self, pid: pid_t) !void {
-    self.*.mutex.lock();
-    defer self.*.mutex.unlock();
-    try self.*.pid_list.append(self.*.allocator, pid);
-}
-
-/// return an allocated slice of all the pid link to the thread,
-/// the caller need to free the resources.
-pub fn slicePidList(self: *Self) ![]pid_t {
-    self.*.mutex.lock();
-    defer self.*.mutex.lock();
-    return try self.*.pid_list.toOwnedSlice(self.*.allocator);
-}
-
 pub fn deinit(self: *Self) void {
     self.stop();
     const allocator = self.*.allocator;

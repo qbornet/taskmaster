@@ -1,10 +1,29 @@
 const std = @import("std");
+const posix = std.posix;
+
+
 const Ymlz = @import("yaml").Ymlz;
 const Allocator = std.mem.Allocator;
 const StringHashMap = std.StringHashMap;
 const gpa = std.heap.page_allocator;
 
-pub const Program = struct { name: []const u8, cmd: []const u8, numprocs: u16, umask: []const u8, workingdir: []const u8, autostart: bool, autorestart: []const u8, exitcodes: []const u8, startretries: u16, starttime: u16, stopsignal: []const u8, stoptime: u16, stdout: []const u8, stderr: []const u8, env: ?[]const u8 };
+pub const Program = struct { 
+    name: []const u8, 
+    cmd: []const u8, 
+    numprocs: u16,
+    umask: []const u8,
+    workingdir: []const u8,
+    autostart: bool,
+    autorestart: []const u8,
+    exitcodes: []const u8,
+    startretries: u16,
+    starttime: u16,
+    stopsignal: []const u8,
+    stoptime: u16,
+    stdout: []const u8,
+    stderr: []const u8,
+    env: ?[]const u8 
+};
 
 const ProgramsYaml = struct {
     programs: []Program,
@@ -16,6 +35,7 @@ const ReadYamlError = error{
 
 pub var autostart_map: StringHashMap(*Program) = undefined;
 pub var programs_map: StringHashMap(*Program) = undefined;
+
 
 fn cloneProgram(allocator: Allocator, original: *const Program) !*Program {
     const clone = try allocator.create(Program);
@@ -42,6 +62,7 @@ fn destroyProgram(allocator: Allocator, to_destroy: *Program) void {
     allocator.destroy(to_destroy);
 }
 
+/// Release ressources `program_map` and `autostart_map`.
 pub fn deinitPrograms(allocator: Allocator) void {
     var iter = programs_map.iterator();
     while (iter.next()) |entry| {
@@ -53,6 +74,32 @@ pub fn deinitPrograms(allocator: Allocator) void {
     }
     autostart_map.deinit();
     programs_map.deinit();
+}
+
+pub fn getSignal(signal: []const u8) !u6 {
+    const signals = std.StaticStringMap(u6).initComptime(.{
+        // Termination
+        .{ "INT",  std.posix.SIG.INT },
+        .{ "TERM", std.posix.SIG.TERM },
+        .{ "KILL", std.posix.SIG.KILL },
+        .{ "QUIT", std.posix.SIG.QUIT },
+
+        // Control
+        .{ "STOP", std.posix.SIG.STOP },
+        .{ "CONT", std.posix.SIG.CONT },
+        .{ "HUP",  std.posix.SIG.HUP },
+        
+        // Custom
+        .{ "USR1", std.posix.SIG.USR1 },
+        .{ "USR2", std.posix.SIG.USR2 },
+        
+        // Errors
+        .{ "SEGV", std.posix.SIG.SEGV },
+        .{ "ILL",  std.posix.SIG.ILL },
+    });
+    const opt_val = signals.get(signal);
+    if (opt_val == null) return error.SignalNotFound;
+    return opt_val.?;
 }
 
 /// return an allocated buffer of the file read by the given path.

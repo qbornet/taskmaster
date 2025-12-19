@@ -5,13 +5,14 @@ const mem = std.mem;
 
 const Allocator = mem.Allocator;
 const Worker = @import("../lib/Worker.zig");
+const ExecutionResult = @import("../programs/execution.zig").ExecutionResult;
 
 const ProgramError = error{ HighTokenCount, ProgramNotFound };
 
 pub const ProgramAction = struct {
     allocator: ?Allocator,
     result: bool,
-    thread_pool: []*Worker,
+    execution_pool: []ExecutionResult,
 };
 
 fn countSizeIterator(iter: *mem.TokenIterator(u8, .scalar)) usize {
@@ -68,7 +69,7 @@ pub fn doProgramAction(allocator: Allocator, line: []const u8) !*ProgramAction {
         program_action.result = true;
         return program_action;
     } else if (mem.eql(u8, line, "reload")) {
-        program_action.thread_pool = try conf.loadConfiguration(allocator, false);
+        program_action.execution_pool = try conf.loadConfiguration(allocator, false);
     } else if (mem.eql(u8, line, "status")) {
         const end = std.mem.indexOfSentinel(u8, 0, arg);
         const realpath = try std.fs.cwd().realpathAlloc(allocator, arg[0..end]);

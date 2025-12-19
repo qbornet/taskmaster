@@ -12,12 +12,16 @@ const optimize = @import("builtin").mode;
 const Printer = @import("lib/Printer.zig");
 const Allocator = std.mem.Allocator;
 
-fn freeTaskmaster(allocator: Allocator, line: []const u8, execution_pool: []*exec.ExecutionResult) void {
+fn freeTaskmaster(allocator: Allocator, line: []const u8, execution_pool: []exec.ExecutionResult) !void {
     std.debug.print("freeing line\n", .{});
     allocator.free(line);
-    // exec.freeProcessProgram();
-    std.debug.print("freeing thread execution\n", .{});
-    exec.freeExecutionPool(allocator, execution_pool);
+    for (execution_pool) |value| {
+        std.debug.print("freeing thread execution for '{s}'\n", .{value.program.name});
+        value.worker.deinit();
+        std.debug.print("stoping process for '{s}'...\n", .{value.program.name});
+        try exec.exitCleanly(value.program);
+    }
+    allocator.free(execution_pool);
     std.debug.print("freeing process program\n", .{});
     exec.freeProcessProgram();
     std.debug.print("freeing parser programs_map and autostart_map\n", .{});
@@ -60,16 +64,14 @@ pub fn main() !void {
     defer allocator.destroy(log_file);
     const stdout: *Printer = try .init(allocator, .Stdout, log_file);
     defer stdout.deinit();
-    try stdout.print("Starting taskmaster...\n", .{});
+    try stdout.print("Starting taskmaster...\n", .{}); 
     const arg = returnArg();
     try parser.startParsing(allocator, arg);
-    exec.process_program_map = .init(allocator);
-    std.debug.print("loading configuration\n", .{});
-    const execution_pool = try conf.loadConfiguration(allocator, true);
+    std.debug.print("loading configuration...\n", .{});
+    var execution_pool = try conf.loadConfiguration(allocator, true);
     for (0..execution_pool.len, execution_pool) |i, execution| {
+        std.debug.print("[{d}]: program: {s}\n", .{ i, execution.program.name});
         std.debug.print("[{d}]: worker: {*}\n", .{ i, execution.worker });
-        std.debug.print("[{d}]: validity_thread: {*}\n", .{ i, execution.validity_thread });
-        execution.validity_thread.join();
     }
     while (true) {
         const line = try reader.readLine(allocator, stdin);
@@ -85,15 +87,19 @@ pub fn main() !void {
                 },
                 else => std.debug.print("Unknown error: '{s}'", .{@errorName(err)}),
             }
-            break :blk &programs.ProgramAction{ .allocator = null, .result = false, .thread_pool = &.{} };
+            break :blk &programs.ProgramAction{ .allocator = null, .result = false, .execution_pool = &.{} };
         };
         if (program_action.result) {
             if (program_action.allocator != null) allocator.destroy(program_action);
-            freeTaskmaster(allocator, line, execution_pool);
+            try freeTaskmaster(allocator, line, execution_pool);
             break;
         }
         if (program_action.allocator != null) {
             allocator.destroy(program_action);
+        }
+        if (program_action.execution_pool.len != 0) {
+            allocator.free(execution_pool);
+            execution_pool = program_action.execution_pool;
         }
         allocator.free(line);
     }

@@ -5,14 +5,16 @@ const posix = std.posix;
 const fmt = std.fmt;
 
 const Allocator = std.mem.Allocator;
+const Atomic = std.atomic.Value;
 const ProcessProgram = @import("ProcessProgram.zig");
 const Program = @import("../parser/parser.zig").Program;
 const Self = @This();
 
 allocator: Allocator,
 
-
 mutex: *std.Thread.Mutex,
+
+valid_process: Atomic(bool),
 
 pid: posix.pid_t,
 
@@ -29,6 +31,7 @@ pub fn init(allocator: Allocator, stdout_path: []const u8, stderr_path: []const 
     errdefer allocator.destroy(self);
     self.*.allocator = allocator;
     self.*.mutex = try allocator.create(std.Thread.Mutex);
+    self.*.valid_process = .init(false);
     self.*.stdout_path = try allocator.dupe(u8, stdout_path);
     self.*.stderr_path = try allocator.dupe(u8, stderr_path);
     return self;
@@ -72,16 +75,23 @@ fn fileExistStderr(self: *Self) bool {
     return false;
 }
 
-fn processRunnerValid(pid: posix.pid_t, second: usize, process_program: *ProcessProgram) !void {
+fn processRunnerValid(self: *Self, pid: posix.pid_t, second: usize, process_program: *ProcessProgram) !void {
     const timer = std.time.ns_per_s * second; 
     std.Thread.sleep(timer);
 
     posix.kill(pid, 0) catch |err| switch (err) {
         error.PermissionDenied => std.debug.print("Unsufficant Permission not allowed to check process\n", .{}),
-        error.ProcessNotFound => std.debug.print("Unable to find [{d}] pid\n", .{pid}),
+        error.ProcessNotFound => {
+            self.valid_process.store(false, .release);
+        },
         else => @panic("unknown error when checking process\n"),
     };
+    self.valid_process.store(true, .release);
     try process_program.pidAdd(pid);
+}
+
+pub fn getProcessValidity(self: *Self) bool {
+    return self.*.valid_process.load(.acquire);
 }
 
 /// start execution of command and return pid.
@@ -140,7 +150,7 @@ pub fn start(self: *Self,  program: *Program, exec: []const []const u8, process_
     const thread: *std.Thread = try allocator.create(std.Thread);
     errdefer allocator.destroy(thread);
 
-    thread.* = try std.Thread.spawn(.{}, processRunnerValid, .{ pid, program.starttime, process_program });
+    thread.* = try std.Thread.spawn(.{}, processRunnerValid, .{ self, pid, program.starttime, process_program });
     return thread;
 }
 
@@ -153,5 +163,6 @@ pub fn deinit(self: *Self) void {
     self.*.mutex.unlock();
     allocator.destroy(self.*.mutex);
     allocator.destroy(self);
+    self.*.valid_process.store(false, .release);
     self.* = undefined;
 }
