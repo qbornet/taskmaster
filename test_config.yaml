@@ -1,4 +1,32 @@
 programs:
+  - name: "vogsphere"
+    cmd: "/home/qbornet/.local/bin/test_thread"
+    numprocs: 8
+    umask: "077"
+    workingdir: /tmp
+    autostart: true
+    autorestart: "unexpected"
+    exitcodes: "0"
+    startretries: 3
+    starttime: 5
+    stopsignal: USR1
+    stoptime: 10
+    stdout: /tmp/vgsworker.stdout
+    stderr: /tmp/vgsworker.stderr
+  - name: "toto"
+    cmd: "/home/qbornet/.local/bin/test_thread"
+    numprocs: 1
+    umask: "022"
+    workingdir: /tmp
+    autostart: false
+    autorestart: "never"
+    exitcodes: "0"
+    startretries: 3
+    starttime: 5
+    stopsignal: TERM
+    stoptime: 10
+    stdout: /tmp/toto.stdout
+    stderr: /tmp/toto.stderr
   - name: "nginx"
     cmd: "/home/qbornet/.local/bin/test_exit"
     numprocs: 1
@@ -14,17 +42,3 @@ programs:
     stdout: /tmp/nginx.stdout
     stderr: /tmp/nginx.stderr
     env: "STARTED_BY=taskmaster,ANSWERED=42"
-  - name: "vogsphere"
-    cmd: "/home/qbornet/.local/bin/test_thread"
-    numprocs: 8
-    umask: "077"
-    workingdir: /tmp
-    autostart: true
-    autorestart: "unexpected"
-    exitcodes: "0"
-    startretries: 3
-    starttime: 5
-    stopsignal: USR1
-    stoptime: 10
-    stdout: /tmp/vgsworker.stdout
-    stderr: /tmp/vgsworker.stderr

@@ -6,11 +6,21 @@ const reader = @import("reader/readline.zig");
 const conf = @import("programs/configuration.zig");
 const exec = @import("programs/execution.zig");
 const programs = @import("programs/programs.zig");
+const lev = @import("reader/levenshtein.zig");
 
 const assert = std.debug.assert;
 const optimize = @import("builtin").mode;
 const Printer = @import("lib/Printer.zig");
 const Allocator = std.mem.Allocator;
+
+/// Use only for freeing overwriten variable not for gracefull exit.  
+fn freeExecutionPool(allocator: Allocator, ep: std.ArrayList(exec.ExecutionResult)) void {
+    var execution_pool = ep;
+    defer execution_pool.deinit(allocator);
+    for (execution_pool.items) |execution_result| {
+        execution_result.worker.deinit();
+    }
+}
 
 fn freeTaskmaster(allocator: Allocator, line: []const u8, execution_pool: []exec.ExecutionResult) !void {
     std.debug.print("freeing line\n", .{});
@@ -21,7 +31,6 @@ fn freeTaskmaster(allocator: Allocator, line: []const u8, execution_pool: []exec
         std.debug.print("stoping process for '{s}'...\n", .{value.program.name});
         try exec.exitCleanly(value.program);
     }
-    allocator.free(execution_pool);
     std.debug.print("freeing process program\n", .{});
     exec.freeProcessProgram();
     std.debug.print("freeing parser programs_map and autostart_map\n", .{});
@@ -37,7 +46,7 @@ fn returnArg() []const u8 {
 fn createLogFile(allocator: Allocator) !*std.fs.File {
     const file = try allocator.create(std.fs.File);
     errdefer allocator.destroy(file);
-    file.* = try std.fs.cwd().createFile("logger.log", .{ .truncate = true });
+    file.* = try std.fs.cwd().createFile("logger.log", .{ .truncate = true, .lock = .exclusive });
     return file;
 }
 
@@ -64,19 +73,20 @@ pub fn main() !void {
     defer allocator.destroy(log_file);
     const stdout: *Printer = try .init(allocator, .Stdout, log_file);
     defer stdout.deinit();
-    try stdout.print("Starting taskmaster...\n", .{}); 
+    try stdout.print("Starting taskmaster...\n", .{});
     const arg = returnArg();
     try parser.startParsing(allocator, arg);
     std.debug.print("loading configuration...\n", .{});
     var execution_pool = try conf.loadConfiguration(allocator, true);
-    for (0..execution_pool.len, execution_pool) |i, execution| {
+    for (0..execution_pool.items.len, execution_pool.items) |i, execution| {
         std.debug.print("[{d}]: program: {s}\n", .{ i, execution.program.name});
         std.debug.print("[{d}]: worker: {*}\n", .{ i, execution.worker });
     }
     while (true) {
+        try stdout.print("ready to read a line...\n", .{});
         const line = try reader.readLine(allocator, stdin);
-        std.debug.print("line: '{s}'\n", .{line});
-        const program_action = programs.doProgramAction(allocator, line) catch |err| blk: {
+        try stdout.print("read '{s}'...\n", .{line});
+        const program_action = programs.doProgramAction(allocator, line) catch |err| {
             switch (err) {
                 error.HighTokenCount => std.debug.print("Too many program entry passed\n", .{}),
                 error.ProgramNotFound => {
@@ -87,19 +97,29 @@ pub fn main() !void {
                 },
                 else => std.debug.print("Unknown error: '{s}'", .{@errorName(err)}),
             }
-            break :blk &programs.ProgramAction{ .allocator = null, .result = false, .execution_pool = &.{} };
+            allocator.free(line);
+            continue;
         };
+        if (program_action.execution_result) |execution_result| {
+            defer allocator.destroy(execution_result);
+            const worker = execution_result.*.worker;
+            const program = execution_result.*.program;
+            try execution_pool.append(allocator, .{ 
+                .worker = worker, 
+                .validity_thread = undefined,
+                .process_runner = undefined,
+                .program = program
+            });
+        }
+        if (program_action.execution_pool) |pa_execution_pool|{
+            freeExecutionPool(allocator, execution_pool);
+            execution_pool = pa_execution_pool;
+        }
+        if (program_action.allocator != null) allocator.destroy(program_action);
         if (program_action.result) {
-            if (program_action.allocator != null) allocator.destroy(program_action);
-            try freeTaskmaster(allocator, line, execution_pool);
+            try freeTaskmaster(allocator, line, execution_pool.items);
+            execution_pool.deinit(allocator);
             break;
-        }
-        if (program_action.allocator != null) {
-            allocator.destroy(program_action);
-        }
-        if (program_action.execution_pool.len != 0) {
-            allocator.free(execution_pool);
-            execution_pool = program_action.execution_pool;
         }
         allocator.free(line);
     }

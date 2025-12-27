@@ -2,6 +2,7 @@ const std = @import("std");
 const posix = std.posix;
 
 
+const Printer = @import("../lib/Printer.zig");
 const Ymlz = @import("yaml").Ymlz;
 const Allocator = std.mem.Allocator;
 const StringHashMap = std.StringHashMap;
@@ -148,7 +149,11 @@ pub fn parseEnv(allocator: Allocator, opt_env: ?[]const u8) ![*:null]const ?[*:0
     return env;
 }
 
-pub fn startParsing(allocator: Allocator, path: []const u8) !void {
+pub fn startParsing(allocator: Allocator, path: []const u8)  !void {
+    var log_file = try std.fs.cwd().openFile("logger.log", .{ .mode = .write_only });
+    try log_file.seekFromEnd(0);
+    const stderr: *Printer = try .init(allocator, .Stderr, &log_file);
+    defer stderr.deinit();
     const realpath = try std.fs.cwd().realpathAlloc(allocator, path);
     defer allocator.free(realpath);
     std.debug.print("startParsing realpath: '{s}'\n", .{realpath});
@@ -161,8 +166,10 @@ pub fn startParsing(allocator: Allocator, path: []const u8) !void {
     };
     defer allocator.free(buf);
 
+    std.debug.print("buf: [{s}]\n", .{buf});
+
     var ymlz = try Ymlz(ProgramsYaml).init(allocator);
-    const result = try ymlz.loadRaw(buf);
+    const result = try ymlz.loadFile(realpath);
     defer ymlz.deinit(result);
 
     programs_map = .init(allocator);
@@ -175,6 +182,7 @@ pub fn startParsing(allocator: Allocator, path: []const u8) !void {
         if (clone.autostart) {
             try autostart_map.put(clone.name, clone);
         } else {
+            try stderr.print("added to program_map program.name: '{s}'\n", .{clone.name});
             try programs_map.put(clone.name, clone);
         }
     }

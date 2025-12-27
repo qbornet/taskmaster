@@ -51,9 +51,13 @@ pub fn init(allocator: Allocator, file: file_type, opt_file_fs: ?*fs.File) !*Sel
 /// Will use format print string, and call `flush()` to make it print.
 /// if at `init()` a file reader was provided will also print to the file.
 pub fn print(self: *Self, comptime fmt: []const u8, args: anytype) !void {
+    try self.*.std_fs.lock(.exclusive);
+    defer self.*.std_fs.unlock();
     const printer = self.*.printer;
     try printer.print(fmt, args);
-    if (self.*.file_fs) |_| {
+    if (self.*.file_fs) |file| {
+        try file.lock(.exclusive);
+        defer file.unlock();
         try self.*.file_printer.print(fmt, args);
     }
     try printer.flush();
@@ -69,7 +73,6 @@ pub fn printFile(self: *Self, comptime fmt: []const u8, args: anytype) !void {
 /// Deinit the allocated resources and close the standard file.
 pub fn deinit(self: *Self) void {
     const allocator = self.*.allocator;
-    self.*.std_fs.close();
     if (self.*.file_fs) |file_reader| {
         file_reader.close();
     }

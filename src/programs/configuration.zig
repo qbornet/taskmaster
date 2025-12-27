@@ -6,19 +6,11 @@ const Worker = @import("../lib/Worker.zig");
 const parser = @import("../parser/parser.zig");
 const exec = @import("execution.zig");
 
-pub fn loadConfiguration(allocator: Allocator, start_boot: bool) ![]exec.ExecutionResult {
+pub fn loadConfiguration(allocator: Allocator, start_boot: bool) !std.ArrayList(exec.ExecutionResult) {
     if (start_boot) {
         var iter = parser.autostart_map.iterator();
-        var index: usize = 0;
-        var execution_pool = try allocator.alloc(exec.ExecutionResult, iter.hm.size);
-        errdefer {
-            var i: usize = 0;
-            while (i < execution_pool.len) : (i += 1) {
-                execution_pool[i].worker.deinit();
-                allocator.destroy(execution_pool[i].worker);
-            }
-            allocator.free(execution_pool);
-        }
+        var execution_pool: std.ArrayList(exec.ExecutionResult) = .empty;
+        errdefer execution_pool.deinit(allocator);
 
         std.debug.print("execution_pool.len: {d}\n", .{iter.hm.size});
         while (iter.next()) |entry| {
@@ -51,13 +43,12 @@ pub fn loadConfiguration(allocator: Allocator, start_boot: bool) ![]exec.Executi
                 execution_result.process_runner.deinit();
                 allocator.destroy(execution_result);
             }
-            execution_pool[index] = .{ 
+            try execution_pool.append(allocator, .{
                 .worker = try .init(allocator, value.name, exec.checkUpProcess, .{ allocator, value }),
                 .validity_thread = undefined,
                 .process_runner = undefined,
                 .program = value
-            };
-            index += 1;
+            });
         }
         return execution_pool;
     } else {
@@ -68,6 +59,6 @@ pub fn loadConfiguration(allocator: Allocator, start_boot: bool) ![]exec.Executi
         // removing it from the autostart_map variable and setting it to the programs_map.
         //
         // Not sure if it need to be restarted or not in that case because the running process doesn't change (maybe ?)
-        return &.{};
+        return std.ArrayList(exec.ExecutionResult).empty;
     }
 }
