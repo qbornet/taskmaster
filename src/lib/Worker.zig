@@ -36,12 +36,10 @@ pub fn init(allocator: Allocator, service: []const u8, function: anytype, args: 
 
 pub fn stop(self: *Self) void {
     self.should_stop.store(true, .release);
-    const val = self.should_stop.load(.acquire);
-    std.debug.print("should_stop: {} service: '{s}'\n", .{ val, self.*.thread_service });
     self.thread.join();
 }
 pub fn deinit(self: *Self) void {
-    self.stop();
+    if (!self.should_stop.load(.acquire)) self.stop();
     const allocator = self.*.allocator;
     allocator.free(self.*.thread_service);
     allocator.destroy(self);

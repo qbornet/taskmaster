@@ -34,7 +34,7 @@
     .dependencies = .{
         .yaml = .{
             .url = "https://api.github.com/repos/pwbh/ymlz/tarball/master",
-            .hash = "ymlz-0.5.0-TG82aTquAAD7Rv1z2UvVTAvSklXEOOPf6OUI9OBZFJDd",
+            .hash = "ymlz-0.5.0-TG82ady2AABq7IVkmjpLyAzNU3rD1WAN_wo86zmU7sBU",
         },
     },
     .paths = .{

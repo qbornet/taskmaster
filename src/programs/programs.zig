@@ -3,6 +3,7 @@ const exec = @import("execution.zig");
 const conf = @import("configuration.zig");
 const parser = @import("../parser/parser.zig");
 const lev = @import("../reader/levenshtein.zig");
+const global = @import("../lib/global_map.zig");
 const mem = std.mem;
 
 const Allocator = mem.Allocator;
@@ -29,11 +30,15 @@ fn countSizeIterator(iter: *mem.TokenIterator(u8, .scalar)) usize {
 /// Restart program given by it's name,
 /// this will do `stopProgram()` and `startProgram()`.
 fn restartProgram(allocator: Allocator, line: []const u8) !*ExecutionResult {
-    std.debug.print("in restart line is '{s}'\n", .{line});
     var iter = mem.tokenizeScalar(u8, line, ' ');
     const size = countSizeIterator(&iter);
     if (size > 2) return ProgramError.HighTokenCount;
-    try stopProgram(line, false);
+    var stdout_printer: *Printer = try .init(allocator, .Stdout, null);
+    defer stdout_printer.deinit();
+    stopProgram(line, false) catch |err| switch (err) {
+        error.ProgramNotFound => try stdout_printer.print("Skipping stop process...\n", .{}),
+        else => return err,
+    };
     return try startProgram(allocator, line, false);
 }
 
@@ -45,10 +50,31 @@ fn stopProgram(line: []const u8, count: bool) !void {
         const size = countSizeIterator(&iter);
         if (size > 2) return ProgramError.HighTokenCount;
     }
+    // log creation
+    var log_file = try std.fs.cwd().createFile("stop_program.log", .{.truncate = true, .read = true });
+    defer log_file.close();
+    const program_printer: *Printer = try .init(std.heap.page_allocator, .Stdout, &log_file);
+    defer program_printer.deinit();
+
+    try program_printer.print("Stop program detected...\n", .{});
+    _ = iter.next();
     if (iter.next()) |token| {
-        std.debug.print("stop program token: '{s}'\n", .{token});
-        return ProgramError.ProgramNotFound;
+        try program_printer.print("Program to stop is '{s}'...\n", .{token});
+        const opt_val = parser.programs_map.get(token);
+        if (opt_val) |program| {
+            const execution_pool = &global.execution_pool;
+            for (0..execution_pool.items.len, execution_pool.items) |i, result| {
+                const program_name = result.program.name;
+                if (mem.eql(u8, program_name, program.name)) { 
+                    result.worker.deinit();
+                    try exec.exitCleanly(program);
+                    _ = execution_pool.orderedRemove(i);
+                    return;
+                }
+            }
+        }
     }
+    return ProgramError.ProgramNotFound;
 }
 
 /// Start program given by it's name, 
@@ -59,20 +85,53 @@ fn startProgram(allocator: Allocator, line: []const u8, count: bool) !*Execution
         const size = countSizeIterator(&iter);
         if (size > 2) return ProgramError.HighTokenCount;
     }
+    // log creation
+    var log_file = try std.fs.cwd().createFile("program_start.log", .{.truncate = true, .read = true });
+    defer log_file.close();
+    const program_printer: *Printer = try .init(allocator, .Stdout, &log_file);
+    defer program_printer.deinit();
+
+    try program_printer.print("Start program detected...\n", .{});
+    _ = iter.next();
     if (iter.next()) |token| {
+        try program_printer.print("Program to start is '{s}'...\n", .{token});
         const opt_val = parser.programs_map.get(token);
         if (opt_val) |program| {
-            const execution_result = try exec.startExecution(allocator, program);
+            var execution_result: *exec.ExecutionResult = undefined;
+            var validity_pool: []*std.Thread = try allocator.alloc(*std.Thread, program.numprocs);
+            defer {
+                var i: usize = 0;
+                while (i < validity_pool.len) : (i += 1) {
+                    validity_pool[i].join();
+                    allocator.destroy(validity_pool[i]);
+                }
+                allocator.free(validity_pool);
+            }
+            for (0..program.numprocs) |i| {
+                execution_result = exec.startExecution(allocator, program) catch |err| {
+                    switch (err) {
+                        error.NoProcessProgramFound => std.debug.print("process_program not found\n", .{}),
+                        else => std.debug.print("error for execution: {s}\n", .{@errorName(err)}),
+                    }
+                    std.debug.print("error found execution done\n", .{});
+                    return err;
+                };
+                validity_pool[i] = execution_result.validity_thread;
+                execution_result.process_runner.deinit();
+                allocator.destroy(execution_result);
+            }
 
-            // clear unused ressources and join thread.
-            execution_result.process_runner.deinit();
-            execution_result.validity_thread.join();
-            allocator.destroy(execution_result.validity_thread);
-
-            execution_result.*.validity_thread = undefined;
-            execution_result.*.worker = try .init(allocator, program.name, exec.checkUpProcess, .{ allocator, program });
+            execution_result = try allocator.create(exec.ExecutionResult);
+            errdefer allocator.destroy(execution_result);
+            execution_result.* = .{
+                .worker = try .init(allocator, program.name, exec.checkUpProcess, .{ allocator, program }),
+                .program = program,
+                .process_runner = undefined,
+                .validity_thread = undefined,
+            };
             return execution_result;
         }
+        try program_printer.print("error program not found '{s}'...\n", .{token});
     }
     return ProgramError.ProgramNotFound;
 }
@@ -118,6 +177,10 @@ fn printHelper(allocator: Allocator, line: []const u8) !void {
     }
 }
 
+const ProgramActionError = error{
+    EmptyLine
+};
+
 pub fn doProgramAction(allocator: Allocator, line: []const u8) !*ProgramAction {
     const program_action = try allocator.create(ProgramAction);
     errdefer allocator.destroy(program_action);
@@ -126,28 +189,31 @@ pub fn doProgramAction(allocator: Allocator, line: []const u8) !*ProgramAction {
     program_action.*.execution_result = null;
     program_action.*.result = false;
     const arg = std.os.argv[1];
-    if (mem.eql(u8, line, "exit")) {
+    var command: []const u8 = undefined;
+    var iter = std.mem.tokenizeScalar(u8, line, ' '); 
+    if (iter.next()) |token| command = token else return ProgramActionError.EmptyLine;
+    if (mem.eql(u8, command, "exit")) {
         program_action.result = true;
         return program_action;
-    } else if (mem.startsWith(u8, line, "help")) {
+    } else if (mem.eql(u8, command, "help")) {
         try printHelper(allocator, line);
-    } else if (mem.eql(u8, line, "reload")) {
+    } else if (mem.eql(u8, command, "reload")) {
         program_action.*.execution_pool = try conf.loadConfiguration(allocator, false);
-    } else if (mem.eql(u8, line, "status")) {
+    } else if (mem.eql(u8, command, "status")) {
         const end = std.mem.indexOfSentinel(u8, 0, arg);
         const realpath = try std.fs.cwd().realpathAlloc(allocator, arg[0..end]);
         defer allocator.free(realpath);
         const result = try parser.readYamlFile(allocator, realpath);
         defer allocator.free(result);
         std.debug.print("{s}\n", .{result});
-    } else if (mem.startsWith(u8, line, "start")) {
+    } else if (mem.eql(u8, command, "start")) {
         program_action.*.execution_result = try startProgram(allocator, line, true);
-    } else if (mem.startsWith(u8, line, "stop")) {
+    } else if (mem.eql(u8, command, "stop")) {
         try stopProgram(line, true);
-    } else if (mem.startsWith(u8, line, "restart")) {
+    } else if (mem.eql(u8, command, "restart")) {
         program_action.*.execution_result = try restartProgram(allocator, line);
     } else {
-        try lev.findLevenshteinError(allocator, line);
+        try lev.findLevenshteinError(allocator, command);
     }
     return program_action;
 }

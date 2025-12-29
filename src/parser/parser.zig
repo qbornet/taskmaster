@@ -38,6 +38,7 @@ pub var autostart_map: StringHashMap(*Program) = undefined;
 pub var programs_map: StringHashMap(*Program) = undefined;
 
 
+/// Clone non allocated program to allocated program.
 fn cloneProgram(allocator: Allocator, original: *const Program) !*Program {
     const clone = try allocator.create(Program);
     errdefer allocator.destroy(clone);
@@ -54,6 +55,7 @@ fn cloneProgram(allocator: Allocator, original: *const Program) !*Program {
     return clone;
 }
 
+/// Clear function needed to destroy program.
 fn destroyProgram(allocator: Allocator, to_destroy: *Program) void {
     inline for (std.meta.fields(Program)) |field| {
         if (field.type == []const u8 or field.type == []u8) {
@@ -77,6 +79,7 @@ pub fn deinitPrograms(allocator: Allocator) void {
     programs_map.deinit();
 }
 
+/// Get the signal `u6` to the coresponding string that you pass.
 pub fn getSignal(signal: []const u8) !u6 {
     const signals = std.StaticStringMap(u6).initComptime(.{
         // Termination
@@ -103,7 +106,7 @@ pub fn getSignal(signal: []const u8) !u6 {
     return opt_val.?;
 }
 
-/// return an allocated buffer of the file read by the given path.
+/// Return an allocated buffer of the file read by the given path.
 pub fn readYamlFile(allocator: Allocator, path: []const u8) ![]const u8 {
     const file = try std.fs.openFileAbsolute(path, .{ .mode = .read_only });
     defer file.close();
@@ -115,7 +118,7 @@ pub fn readYamlFile(allocator: Allocator, path: []const u8) ![]const u8 {
     return if (ret != size) ReadYamlError.FailedRead else buffer;
 }
 
-/// return allocated ressources the caller need to free the return value.
+/// Return allocated ressources the caller need to free the return value.
 pub fn parseEnv(allocator: Allocator, opt_env: ?[]const u8) ![*:null]const ?[*:0]const u8 {
     const sys_env_slice = std.os.environ;
     var extra_size: usize = 0;
@@ -149,11 +152,8 @@ pub fn parseEnv(allocator: Allocator, opt_env: ?[]const u8) ![*:null]const ?[*:0
     return env;
 }
 
-pub fn startParsing(allocator: Allocator, path: []const u8)  !void {
-    var log_file = try std.fs.cwd().openFile("logger.log", .{ .mode = .write_only });
-    try log_file.seekFromEnd(0);
-    const stderr: *Printer = try .init(allocator, .Stderr, &log_file);
-    defer stderr.deinit();
+pub fn startParsing(allocator: Allocator, path: []const u8, printer: *Printer)  !void {
+    try printer.print("starting parsing...\n", .{});
     const realpath = try std.fs.cwd().realpathAlloc(allocator, path);
     defer allocator.free(realpath);
     std.debug.print("startParsing realpath: '{s}'\n", .{realpath});
@@ -166,13 +166,14 @@ pub fn startParsing(allocator: Allocator, path: []const u8)  !void {
     };
     defer allocator.free(buf);
 
-    std.debug.print("buf: [{s}]\n", .{buf});
-
     var ymlz = try Ymlz(ProgramsYaml).init(allocator);
     const result = try ymlz.loadFile(realpath);
     defer ymlz.deinit(result);
 
     programs_map = .init(allocator);
+
+    // autostart_map is only needed for the autostart functionality,
+    // and to keep track of which program is needed for autostart when reloading config.
     autostart_map = .init(allocator);
     errdefer programs_map.deinit();
     errdefer autostart_map.deinit();
@@ -181,8 +182,12 @@ pub fn startParsing(allocator: Allocator, path: []const u8)  !void {
         errdefer destroyProgram(allocator, clone);
         if (clone.autostart) {
             try autostart_map.put(clone.name, clone);
+
+            // this is done because we need another clone for programs_map.
+            const program_clone = try cloneProgram(allocator, &program);
+            try programs_map.put(program_clone.name, program_clone);
         } else {
-            try stderr.print("added to program_map program.name: '{s}'\n", .{clone.name});
+            try printer.print("added to program_map program.name: '{s}'\n", .{clone.name});
             try programs_map.put(clone.name, clone);
         }
     }

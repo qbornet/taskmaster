@@ -7,6 +7,7 @@ const conf = @import("programs/configuration.zig");
 const exec = @import("programs/execution.zig");
 const programs = @import("programs/programs.zig");
 const lev = @import("reader/levenshtein.zig");
+const global = @import("lib/global_map.zig");
 
 const assert = std.debug.assert;
 const optimize = @import("builtin").mode;
@@ -46,7 +47,7 @@ fn returnArg() []const u8 {
 fn createLogFile(allocator: Allocator) !*std.fs.File {
     const file = try allocator.create(std.fs.File);
     errdefer allocator.destroy(file);
-    file.* = try std.fs.cwd().createFile("logger.log", .{ .truncate = true, .lock = .exclusive });
+    file.* = try std.fs.cwd().createFile("logger.log", .{ .truncate = true });
     return file;
 }
 
@@ -70,14 +71,19 @@ pub fn main() !void {
     }
 
     const log_file = try createLogFile(allocator);
-    defer allocator.destroy(log_file);
+    defer {
+        log_file.close();
+        allocator.destroy(log_file);
+    }
     const stdout: *Printer = try .init(allocator, .Stdout, log_file);
     defer stdout.deinit();
-    try stdout.print("Starting taskmaster...\n", .{});
     const arg = returnArg();
-    try parser.startParsing(allocator, arg);
-    std.debug.print("loading configuration...\n", .{});
-    var execution_pool = try conf.loadConfiguration(allocator, true);
+    var execution_pool = &global.execution_pool;
+
+    try stdout.print("Starting taskmaster...\n", .{});
+    try parser.startParsing(allocator, arg, stdout);
+    try stdout.print("loading configuration...\n", .{});
+    execution_pool.* = try conf.loadConfiguration(allocator, true);
     for (0..execution_pool.items.len, execution_pool.items) |i, execution| {
         std.debug.print("[{d}]: program: {s}\n", .{ i, execution.program.name});
         std.debug.print("[{d}]: worker: {*}\n", .{ i, execution.worker });
@@ -112,8 +118,8 @@ pub fn main() !void {
             });
         }
         if (program_action.execution_pool) |pa_execution_pool|{
-            freeExecutionPool(allocator, execution_pool);
-            execution_pool = pa_execution_pool;
+            freeExecutionPool(allocator, execution_pool.*);
+            execution_pool.* = pa_execution_pool;
         }
         if (program_action.allocator != null) allocator.destroy(program_action);
         if (program_action.result) {

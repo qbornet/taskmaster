@@ -12,8 +12,18 @@ to /dev/null.
 
 Need to do reload configuration, check github issue for more information.
 
+
+## Parsing
+
+Check that parsing is properly done also **unsure that program is unique you cannot have multiple program with the same name**
+
 ## Start & stop program from cmdline.
 
 If programs are not in `autostart_map` we can start them with "start", "stop" with command line follow by the program name,
 
 Create other program in yaml for testing if start work properly.
+
+## TESTING
+
+Need to test more cmdline find bugs, potential edge cases.
+Test exitcodes are handle properly as well as restart policies, external kill done through process. 
