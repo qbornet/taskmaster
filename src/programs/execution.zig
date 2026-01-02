@@ -12,9 +12,6 @@ const Allocator = std.mem.Allocator;
 const Child = std.process.Child;
 
 /// Needed because `startExecution()` error cannot be infered
-const StartExecutionError = error{
-    NoProcessProgramFound
-} || std.fmt.ParseIntError || std.Thread.SpawnError || std.fs.File.OpenError || Allocator.Error || Child.SpawnError || Child.WaitError;
 
 pub const ExecutionResult = struct {
     worker: *Worker,
@@ -220,6 +217,11 @@ pub fn freeExecutionPool(allocator: Allocator, execution_pool: []*ExecutionResul
     }
     allocator.free(execution_pool);
 }
+
+const StartExecutionError = error{
+    NoProcessProgramFound
+} || std.fmt.ParseIntError || std.Thread.SpawnError || std.fs.File.OpenError 
+  || Allocator.Error || Child.SpawnError || Child.WaitError;
 
 /// Handle the execution of the program create the process and worker (thread) to,
 /// check if number of process are correct.

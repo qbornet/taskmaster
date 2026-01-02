@@ -15,7 +15,7 @@ programs:
     stderr: /tmp/vgsworker.stderr
   - name: "toto"
     cmd: "/home/qbornet/.local/bin/test_thread"
-    numprocs: 1
+    numprocs: 2
     umask: "022"
     workingdir: /tmp
     autostart: false
