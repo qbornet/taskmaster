@@ -2,6 +2,8 @@ const std = @import("std");
 const posix = std.posix;
 
 
+const exec = @import("../programs/execution.zig");
+const ProcessProgram = @import("../lib/ProcessProgram.zig");
 const Printer = @import("../lib/Printer.zig");
 const Ymlz = @import("yaml").Ymlz;
 const Allocator = std.mem.Allocator;
@@ -166,6 +168,7 @@ pub fn startParsing(allocator: Allocator, path: []const u8, printer: *Printer)  
     };
     defer allocator.free(buf);
 
+    var process_program: *ProcessProgram = undefined;
     var ymlz = try Ymlz(ProgramsYaml).init(allocator);
     const result = try ymlz.loadFile(realpath);
     defer ymlz.deinit(result);
@@ -177,6 +180,7 @@ pub fn startParsing(allocator: Allocator, path: []const u8, printer: *Printer)  
     autostart_map = .init(allocator);
     errdefer programs_map.deinit();
     errdefer autostart_map.deinit();
+    errdefer exec.process_program_map.deinit(); // deinit content when err received.
     for (result.programs) |program| {
         const clone = try cloneProgram(allocator, &program);
         errdefer destroyProgram(allocator, clone);
@@ -186,8 +190,14 @@ pub fn startParsing(allocator: Allocator, path: []const u8, printer: *Printer)  
             // this is done because we need another clone for programs_map.
             const program_clone = try cloneProgram(allocator, &program);
             try programs_map.put(program_clone.name, program_clone);
+            process_program = try .init(allocator, clone.name);
+            errdefer process_program.deinit();
+            try exec.process_program_map.put(clone.name, process_program);
         } else {
             try printer.print("added to program_map program.name: '{s}'\n", .{clone.name});
+            process_program = try .init(allocator, clone.name);
+            errdefer process_program.deinit();
+            try exec.process_program_map.put(clone.name, process_program);
             try programs_map.put(clone.name, clone);
         }
     }

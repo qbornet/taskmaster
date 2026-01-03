@@ -5,6 +5,7 @@ const parser = @import("../parser/parser.zig");
 const lev = @import("../reader/levenshtein.zig");
 const global = @import("../lib/global_map.zig");
 const mem = std.mem;
+const fs = std.fs;
 
 const Allocator = mem.Allocator;
 const Worker = @import("../lib/Worker.zig");
@@ -25,6 +26,105 @@ fn countSizeIterator(iter: *mem.TokenIterator(u8, .scalar)) usize {
     while (iter.next()) |_| : (size += 1) {}
     iter.reset();
     return size;
+}
+
+const PrintStatusProgramError = error{
+    NoProgramName,
+    ProcessProgramNotFound,
+} || fs.File.SeekError || fs.File.LockError || Allocator.Error || std.Io.Writer.Error;
+
+fn printStatusProgram(opt_program_name: ?[]const u8) PrintStatusProgramError!void {
+    if (opt_program_name == null) return PrintStatusProgramError.NoProgramName;
+    const program_name = opt_program_name.?;
+
+    const opt_pp = exec.process_program_map.get(program_name);
+    if (opt_pp == null) return PrintStatusProgramError.ProcessProgramNotFound;
+    const process_program = opt_pp.?;
+
+    // Init allocator
+    var buffer: [65536]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buffer);
+    const allocator = fba.allocator();
+
+    const printer: *Printer = try .init(allocator, .Stdout, null);
+    defer printer.deinit();
+
+    var i: usize = 0;
+    var count: usize = 0;
+    process_program.mutex.lock();
+    defer process_program.mutex.unlock();
+    const process_list = process_program.getProcessList();
+    const slices = process_list.items;
+    if (slices.len == 0) {
+        try printer.print("{s} as no running process...\n", .{program_name});
+        return;
+    }
+    try printer.print("{s} status of process\n.\n", .{program_name});
+    while (i < slices.len) : (i += 1) {
+        const pid = slices[i];
+        if (i+1 == slices.len) try printer.print("└── ", .{}) else try printer.print("├── ", .{});
+        std.posix.kill(pid, 0) catch |err| switch (err) {
+            error.PermissionDenied => {
+                try printer.print("{d} 𐄂\n", .{pid});
+                continue;
+            },
+            error.ProcessNotFound => {
+                try printer.print("{d} 𐄂\n", .{pid});
+                continue;
+            },
+            else => @panic("unknown error when communicating to process"),
+        };
+        try printer.print("{d} ✓\n", .{pid});
+        count += 1;
+    }
+}
+
+fn printStatusAllProgram() !void {
+    var printer: *Printer = undefined;
+    var buffer: [65536]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buffer);
+    const allocator = fba.allocator();
+
+    printer = try .init(allocator, .Stdout, null);
+    defer printer.deinit();
+    
+    try printer.print("Status of currently running programs:\n.\n", .{});
+    var count: usize = 0;
+    var it = exec.process_program_map.iterator();
+    while (it.next()) |entry| : (count += 1){
+        var i: usize = 0;
+        const program_name = entry.key_ptr.*;
+        const process_program = entry.value_ptr.*;
+        process_program.mutex.lock();
+        const process_list = process_program.getProcessList();
+        while (i < process_list.items.len) : (i += 1) {
+            const pid = process_list.items[i];
+            std.posix.kill(pid, 0) catch |err| switch (err) {
+                error.PermissionDenied => break,
+                error.ProcessNotFound => break,
+                else => @panic("unknown error when communicating to process")
+            };
+        }
+        if (count+1 == it.len) try printer.print("└── ", .{}) else try printer.print("├── ", .{});
+        if (process_list.items.len != 0 and i == process_list.items.len) {
+            try printer.print("{s} ✓\n", .{program_name});
+        } else {
+            try printer.print("{s} 𐄂\n", .{program_name});
+        }
+        process_program.mutex.unlock();
+    }
+}
+
+/// Print the current status of all program if no programs is specified or
+/// print the status of all process of a specific program.
+fn statusPrograms(line: []const u8) !void {
+    var iter = mem.tokenizeScalar(u8, line, ' ');
+    const size = countSizeIterator(&iter);
+    if (size == 1) {
+        return try printStatusAllProgram();
+    }
+    _ = iter.next();
+    try printStatusProgram(iter.next());
 }
 
 /// Restart program given by it's name,
@@ -145,7 +245,7 @@ fn printCommandHelp(printer: *Printer, token: []const u8) !void  {
     } else if (mem.eql(u8, token, "start")) {
         try printer.print("usage: 'start <program_name>' (start the program_name provided)\n", .{});
     } else if (mem.eql(u8, token, "status")) {
-        try printer.print("usage: 'status' (print the current known configuration passed as parameter)\n", .{});
+        try printer.print("usage: 'status <optional_progam_name>' (print the process status of a program or all status of all program.)\n", .{});
     } else if (mem.eql(u8, token, "reload")) {
         try printer.print("usage: 'reload' (reload configuration from the same path file provided)\n", .{});
     } else if (mem.eql(u8, token, "restart")) {
@@ -188,7 +288,6 @@ pub fn doProgramAction(allocator: Allocator, line: []const u8) !*ProgramAction {
     program_action.*.execution_pool = null;
     program_action.*.execution_result = null;
     program_action.*.result = false;
-    const arg = std.os.argv[1];
     var command: []const u8 = undefined;
     var iter = std.mem.tokenizeScalar(u8, line, ' '); 
     if (iter.next()) |token| command = token else return ProgramActionError.EmptyLine;
@@ -200,12 +299,7 @@ pub fn doProgramAction(allocator: Allocator, line: []const u8) !*ProgramAction {
     } else if (mem.eql(u8, command, "reload")) {
         program_action.*.execution_pool = try conf.loadConfiguration(allocator, false);
     } else if (mem.eql(u8, command, "status")) {
-        const end = std.mem.indexOfSentinel(u8, 0, arg);
-        const realpath = try std.fs.cwd().realpathAlloc(allocator, arg[0..end]);
-        defer allocator.free(realpath);
-        const result = try parser.readYamlFile(allocator, realpath);
-        defer allocator.free(result);
-        std.debug.print("{s}\n", .{result});
+        try statusPrograms(line);
     } else if (mem.eql(u8, command, "start")) {
         program_action.*.execution_result = try startProgram(allocator, line, true);
     } else if (mem.eql(u8, command, "stop")) {
