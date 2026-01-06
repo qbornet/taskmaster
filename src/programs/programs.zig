@@ -87,7 +87,8 @@ fn printStatusAllProgram() !void {
 
     printer = try .init(allocator, .Stdout, null);
     defer printer.deinit();
-    
+
+    try printer.print("File config: \n{s}\n", .{parser.current_config});
     try printer.print("Status of currently running programs:\n.\n", .{});
     var count: usize = 0;
     var it = exec.process_program_map.iterator();
@@ -95,6 +96,11 @@ fn printStatusAllProgram() !void {
         var i: usize = 0;
         const program_name = entry.key_ptr.*;
         const process_program = entry.value_ptr.*;
+        const opt_prog = parser.autostart_map.get(program_name);
+        if (opt_prog) |prog| {
+            try printer.print("current autostart status: '{s}':{any}\n", .{program_name, prog.autostart});
+            try printer.print("current env status: '{s}':{?s}\n", .{program_name, prog.env});
+        }
         process_program.mutex.lock();
         const process_list = process_program.getProcessList();
         while (i < process_list.items.len) : (i += 1) {

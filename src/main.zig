@@ -24,6 +24,8 @@ fn freeExecutionPool(allocator: Allocator, ep: std.ArrayList(exec.ExecutionResul
 }
 
 fn freeTaskmaster(allocator: Allocator, line: []const u8, execution_pool: []exec.ExecutionResult) !void {
+    std.debug.print("freeing current_configuration\n", .{});
+    allocator.free(parser.current_config);
     std.debug.print("freeing line\n", .{});
     allocator.free(line);
     for (execution_pool) |value| {
@@ -83,11 +85,8 @@ pub fn main() !void {
     try stdout.print("Starting taskmaster...\n", .{});
     try parser.startParsing(allocator, arg, stdout);
     try stdout.print("loading configuration...\n", .{});
-    execution_pool.* = try conf.loadConfiguration(allocator, true);
-    for (0..execution_pool.items.len, execution_pool.items) |i, execution| {
-        std.debug.print("[{d}]: program: {s}\n", .{ i, execution.program.name});
-        std.debug.print("[{d}]: worker: {*}\n", .{ i, execution.worker });
-    }
+    const tmp_pool = try conf.loadConfiguration(allocator, true);
+    execution_pool.* = tmp_pool.?;
     while (true) {
         try stdout.print("ready to read a line...\n", .{});
         const line = try reader.readLine(allocator, stdin);
@@ -111,7 +110,7 @@ pub fn main() !void {
             const worker = execution_result.*.worker;
             const program = execution_result.*.program;
             try execution_pool.append(allocator, .{ 
-                .worker = worker, 
+                .worker = worker,
                 .validity_thread = undefined,
                 .process_runner = undefined,
                 .program = program

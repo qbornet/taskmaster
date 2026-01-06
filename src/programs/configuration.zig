@@ -6,7 +6,7 @@ const Worker = @import("../lib/Worker.zig");
 const parser = @import("../parser/parser.zig");
 const exec = @import("execution.zig");
 
-pub fn loadConfiguration(allocator: Allocator, start_boot: bool) !std.ArrayList(exec.ExecutionResult) {
+pub fn loadConfiguration(allocator: Allocator, start_boot: bool) !?std.ArrayList(exec.ExecutionResult) {
     if (start_boot) {
         var iter = parser.autostart_map.iterator();
         var execution_pool: std.ArrayList(exec.ExecutionResult) = .empty;
@@ -53,12 +53,16 @@ pub fn loadConfiguration(allocator: Allocator, start_boot: bool) !std.ArrayList(
         return execution_pool;
     } else {
         std.debug.print("reloading config\n", .{});
-        // should modif the behavior to have a comparaison done and change the programs,
-        // according to the modification done so if for example autostart is set to false,
-        // we need to remove the configuration that as the new autostart set to false by,
-        // removing it from the autostart_map variable and setting it to the programs_map.
-        //
-        // Not sure if it need to be restarted or not in that case because the running process doesn't change (maybe ?)
-        return std.ArrayList(exec.ExecutionResult).empty;
+        const end_index = std.mem.indexOfSentinel(u8, 0, std.os.argv[1]);
+        const arg = std.os.argv[1][0..end_index];
+        const realpath = try std.fs.cwd().realpathAlloc(allocator, arg);
+        defer allocator.free(realpath);
+        const new_config = try parser.readYamlFile(allocator, realpath);
+        if (std.mem.eql(u8, new_config, parser.current_config)) {
+            allocator.free(new_config);
+            return null;
+        }
+        try parser.reloadMap(allocator, new_config);
+        return null;
     }
 }
