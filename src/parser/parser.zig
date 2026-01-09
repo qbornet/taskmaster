@@ -41,6 +41,7 @@ pub var autostart_map: StringHashMap(*Program) = undefined;
 pub var programs_map: StringHashMap(*Program) = undefined;
 
 
+/// Clone new if didn't exist, modify the program via diff.
 fn realoadProgramMap(allocator: Allocator, new: *const Program) !void {
     const printer: *Printer = try .init(allocator, .Stdout, null);
     defer printer.deinit();
@@ -64,6 +65,7 @@ fn realoadProgramMap(allocator: Allocator, new: *const Program) !void {
     }
 }
 
+/// Change the original program with the new program value.
 fn diffProgram(allocator: Allocator, original: *Program, new: *const Program) !void {
     const printer: *Printer = try .init(allocator, .Stdout, null);
     defer printer.deinit();
@@ -117,6 +119,102 @@ fn diffProgram(allocator: Allocator, original: *Program, new: *const Program) !v
             if (old_value == field_value) break :blk;
             @field(original, field.name) = field_value;
         }
+    }
+}
+
+fn validWorkingDir(workingdir: []const u8) !bool {
+    const dir = try std.fs.openDirAbsolute(workingdir, .{});
+    const stat = try dir.stat();
+    if (stat.kind != .directory) return error.NotADirectory;
+    return (stat.mode & std.c.S.IXUSR) != 0;
+}
+
+fn validCommand(cmd: []const u8) !bool {
+    const file = try std.fs.openFileAbsolute(cmd, .{ .mode = .read_only });
+    defer file.close();
+    const stat = try file.stat();
+    if (stat.kind != .file) return error.NotAFile;
+    return (stat.mode & std.c.S.IXUSR) != 0;
+}
+
+const ValidParserError = error{
+    EmptyName,
+    InvalidName,
+    InvalidUmask,
+    InvalidSignal,
+    InvalidCommand,
+    InvalidWorkingDir,
+    InvalidNumOfProcess,
+    InvalidRestartPolicies,
+};
+
+fn validParser(allocator: Allocator, result: ProgramsYaml) !void {
+    var name_set: std.BufSet = .init(allocator);
+    defer name_set.deinit();
+    const printer: *Printer = try .init(allocator, .Stderr, null);
+    defer printer.deinit();
+    const rlim = try posix.getrlimit(posix.rlimit_resource.NPROC);
+    for (result.programs) |program| {
+        if (name_set.contains(program.name)) {
+            try printer.print("error parsing: Invalid name you already have a program name '{s}\n'", .{program.name});
+            return ValidParserError.InvalidName;
+        }
+        if (std.mem.eql(u8, program.name, "")) {
+            try printer.print("error parsing: Empty name not allowed for program\n", .{});
+            return ValidParserError.EmptyName;
+        }
+        try name_set.insert(program.name);
+        var ret = if (validCommand(program.cmd)) |r| r else |err| {
+            switch (err) {
+                error.FileNotFound => try printer.print("error parsing: '{s}': Command file doesn't exist should be absolute path\n", .{program.name}),
+                error.AccessDenied => try printer.print("error parsing: '{s}': Command not allowed unsifficent permision\n", .{program.name}),
+                error.NotAFile => try printer.print("error parsing: '{s}': Command is not a file\n", .{program.name}),
+                else => try printer.print("error parsing: '{s}': error '{s}'\n", .{program.name, @errorName(err)}),
+            }
+            return ValidParserError.InvalidCommand;
+        };
+        if (!ret) {
+            try printer.print("error parsing: '{s}': Command is not executable\n", .{program.name});
+            return ValidParserError.InvalidCommand;
+        }
+        if (program.numprocs >= rlim.max) {
+            try printer.print("error parsing: '{s}': Number of process is to high not allowed\n", .{program.name});
+            return ValidParserError.InvalidNumOfProcess;
+        }
+        if (std.fmt.parseInt(u16, program.umask, 8)) |_| _ = true else |err| {
+            switch (err) {
+                error.InvalidCharacter => try printer.print("error parsing: '{s}': Umask is not written in octal format\n", .{program.name}),
+                error.Overflow => try printer.print("error parsing: '{s}': Umask is overflowing\n", .{program.name}),
+            }
+            return ValidParserError.InvalidUmask;
+        }
+        // add valid exitcodes
+        ret = if (validWorkingDir(program.workingdir)) |r| r else |err| {
+            switch (err) {
+                error.FileNotFound => try printer.print("error parsing: '{s}': WorkingDir doesn't exist should be absolute path\n", .{program.name}),
+                error.AccessDenied => try printer.print("error parsing: '{s}': WorkingDir not allowed unsifficent permision\n", .{program.name}),
+                error.NotADirectory => try printer.print("error parsing: '{s}': WorkingDir is not a directory\n", .{program.name}),
+                else => try printer.print("error parsing: '{s}': error '{s}'\n", .{program.name, @errorName(err)}),
+            }
+            return ValidParserError.InvalidWorkingDir;
+        };
+        if (!ret) {
+            try printer.print("error parsing: '{s}': WorkingDir is not a accessible\n", .{program.name});
+            return ValidParserError.InvalidWorkingDir;
+        }
+        
+        if (!std.mem.eql(u8, program.autorestart, "never") 
+            and !std.mem.eql(u8, program.autorestart, "always")
+            and !std.mem.eql(u8, program.autorestart, "unexpected")) {
+            try printer.print("error parsing: '{s}': Autorestart policies should be either 'never' or 'always' or 'unexpected'\n", .{program.name});
+            return ValidParserError.InvalidRestartPolicies;
+        }
+        _ = if (getSignal(program.stopsignal)) |_| true else |err| {
+            switch (err) {
+                error.SignalNotFound => try printer.print("error parsing: '{s}': Signal provided doesn't exist\n", .{program.name}),
+            }
+            return ValidParserError.InvalidSignal;
+        };
     }
 }
 
@@ -245,6 +343,7 @@ pub fn parseEnv(allocator: Allocator, opt_env: ?[]const u8) ![*:null]const ?[*:0
     return env;
 }
 
+/// reloadMap change the autostart_map, programs_map with the new configuration.
 pub fn reloadMap(allocator: Allocator, config: []const u8) !void {
     allocator.free(current_config);
     current_config = config;
@@ -259,11 +358,11 @@ pub fn reloadMap(allocator: Allocator, config: []const u8) !void {
     }
 }
 
+/// Initiate the parsing of the passed yml path.
 pub fn startParsing(allocator: Allocator, path: []const u8, printer: *Printer)  !void {
     try printer.print("starting parsing...\n", .{});
     const realpath = try std.fs.cwd().realpathAlloc(allocator, path);
     defer allocator.free(realpath);
-    std.debug.print("startParsing realpath: '{s}'\n", .{realpath});
     const buf = readYamlFile(allocator, realpath) catch |err| {
         switch (err) {
             error.FailedRead => std.debug.print("error: FailedRead didn't read all the file\n", .{}),
@@ -274,11 +373,13 @@ pub fn startParsing(allocator: Allocator, path: []const u8, printer: *Printer)  
     defer allocator.free(buf);
 
     current_config = try readYamlFile(allocator, realpath);
+    errdefer allocator.free(current_config);
     var process_program: *ProcessProgram = undefined;
     var ymlz = try Ymlz(ProgramsYaml).init(allocator);
-    errdefer ymlz.deinit(null);
     const result = try ymlz.loadRaw(current_config);
     defer ymlz.deinit(result);
+    try validParser(allocator, result);
+
 
     programs_map = .init(allocator);
 
@@ -301,7 +402,6 @@ pub fn startParsing(allocator: Allocator, path: []const u8, printer: *Printer)  
             errdefer process_program.deinit();
             try exec.process_program_map.put(clone.name, process_program);
         } else {
-            try printer.print("added to program_map program.name: '{s}'\n", .{clone.name});
             process_program = try .init(allocator, clone.name);
             errdefer process_program.deinit();
             try exec.process_program_map.put(clone.name, process_program);

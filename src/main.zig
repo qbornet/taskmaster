@@ -9,7 +9,6 @@ const programs = @import("programs/programs.zig");
 const lev = @import("reader/levenshtein.zig");
 const global = @import("lib/global_map.zig");
 
-const assert = std.debug.assert;
 const optimize = @import("builtin").mode;
 const Printer = @import("lib/Printer.zig");
 const Allocator = std.mem.Allocator;
@@ -24,33 +23,19 @@ fn freeExecutionPool(allocator: Allocator, ep: std.ArrayList(exec.ExecutionResul
 }
 
 fn freeTaskmaster(allocator: Allocator, line: []const u8, execution_pool: []exec.ExecutionResult) !void {
-    std.debug.print("freeing current_configuration\n", .{});
     allocator.free(parser.current_config);
-    std.debug.print("freeing line\n", .{});
     allocator.free(line);
     for (execution_pool) |value| {
-        std.debug.print("freeing thread execution for '{s}'\n", .{value.program.name});
         value.worker.deinit();
-        std.debug.print("stoping process for '{s}'...\n", .{value.program.name});
         try exec.exitCleanly(value.program);
     }
-    std.debug.print("freeing process program\n", .{});
     exec.freeProcessProgram();
-    std.debug.print("freeing parser programs_map and autostart_map\n", .{});
     parser.deinitPrograms(allocator);
-    std.debug.print("finished freeing\n", .{});
 }
 
 fn returnArg() []const u8 {
     const endIndex = std.mem.indexOfSentinel(u8, 0, std.os.argv[1]);
     return std.os.argv[1][0..endIndex];
-}
-
-fn createLogFile(allocator: Allocator) !*std.fs.File {
-    const file = try allocator.create(std.fs.File);
-    errdefer allocator.destroy(file);
-    file.* = try std.fs.cwd().createFile("logger.log", .{ .truncate = true });
-    return file;
 }
 
 pub fn main() !void {
@@ -72,12 +57,9 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
-    const log_file = try createLogFile(allocator);
-    defer {
-        log_file.close();
-        allocator.destroy(log_file);
-    }
-    const stdout: *Printer = try .init(allocator, .Stdout, log_file);
+    const stderr: *Printer = try .init(allocator, .Stderr, null);
+    defer stderr.deinit();
+    const stdout: *Printer = try .init(allocator, .Stdout, null);
     defer stdout.deinit();
     const arg = returnArg();
     var execution_pool = &global.execution_pool;
@@ -88,19 +70,17 @@ pub fn main() !void {
     const tmp_pool = try conf.loadConfiguration(allocator, true);
     execution_pool.* = tmp_pool.?;
     while (true) {
-        try stdout.print("ready to read a line...\n", .{});
         const line = try reader.readLine(allocator, stdin);
-        try stdout.print("read '{s}'...\n", .{line});
         const program_action = programs.doProgramAction(allocator, line) catch |err| {
             switch (err) {
-                error.HighTokenCount => std.debug.print("Too many program entry passed\n", .{}),
+                error.HighTokenCount => try stderr.print("Too many program entry passed\n", .{}),
                 error.ProgramNotFound => {
                     const opt_pos = std.ascii.indexOfIgnoreCase(line, " ");
                     if (opt_pos) |pos| {
-                        std.debug.print("Programs '{s}' doens't exist\n", .{line[pos + 1 ..]});
-                    } else std.debug.print("Programs doens't exist\n", .{});
+                        try stderr.print("Programs '{s}' doens't exist\n", .{line[pos + 1 ..]});
+                    } else try stderr.print("Programs doens't exist\n", .{});
                 },
-                else => std.debug.print("Unknown error: '{s}'", .{@errorName(err)}),
+                else => try stderr.print("Unknown error: '{s}'", .{@errorName(err)}),
             }
             allocator.free(line);
             continue;
