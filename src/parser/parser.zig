@@ -43,9 +43,6 @@ pub var programs_map: StringHashMap(*Program) = undefined;
 
 /// Clone new if didn't exist, modify the program via diff.
 fn realoadProgramMap(allocator: Allocator, new: *const Program) !void {
-    const printer: *Printer = try .init(allocator, .Stdout, null);
-    defer printer.deinit();
-    try printer.print("reloadProgram start...\n", .{});
     const opt_auto_original: ?*Program = autostart_map.get(new.name);
     const opt_original: ?*Program = programs_map.get(new.name);
     if (opt_auto_original == null and new.autostart) {
@@ -53,7 +50,6 @@ fn realoadProgramMap(allocator: Allocator, new: *const Program) !void {
         allocator.destroy(new);
         try autostart_map.put(clone.name, clone);
     } else if (opt_auto_original != null) {
-        try printer.print("diffing autostart_program_map for '{s}' to '{s}'\n", .{new.name, opt_auto_original.?.name});
         try diffProgram(allocator, opt_auto_original.?, new);
     }
     if (opt_original == null) {
@@ -67,51 +63,38 @@ fn realoadProgramMap(allocator: Allocator, new: *const Program) !void {
 
 /// Change the original program with the new program value.
 fn diffProgram(allocator: Allocator, original: *Program, new: *const Program) !void {
-    const printer: *Printer = try .init(allocator, .Stdout, null);
-    defer printer.deinit();
-    try printer.print("Starting diff program for '{s}'...\n", .{original.name});
     inline for (std.meta.fields(Program)) |field| {
         if (field.type == []const u8 or field.type == []u8) blk: {
-            try printer.print("Inside field.name: '{s}' type []u8 or []const u8\n", .{field.name});
             const old_value = @field(original.*, field.name);
             const field_value = @field(new.*, field.name);
-            try printer.print("field_value={s}, old_value={s}\n", .{field_value, old_value});
             if (std.mem.eql(u8, old_value, field_value)) break :blk;
             @field(original, field.name) = try allocator.dupe(u8, field_value);
             errdefer allocator.free(@field(original, field.name));
             allocator.free(old_value);
-            try printer.print("new_value for original: {s}\n", .{@field(original, field.name)});
         }
         if (field.type == ?[]const u8) blk: {
-            try printer.print("Inside field.name: '{s}' type ?[]const u8\n", .{field.name});
             const old_value = @field(original.*, field.name);
             const field_value = @field(new.*, field.name);
             if ((old_value == null and field_value == null) 
                 or (old_value != null and field_value != null 
                     and std.mem.eql(u8, old_value.?, field_value.?))) break :blk;
             if (old_value == null and field_value != null) {
-                try printer.print("old_value is {?s} and field_value is {?s}\n", .{old_value, field_value});
                 @field(original, field.name) = try allocator.dupe(u8, field_value.?);
                 errdefer allocator(@field(original, field.name));
             } else if (old_value != null and field_value == null) {
-                try printer.print("old_value is {?s} and field_value is {?s}\n", .{old_value, field_value});
                 allocator.free(old_value.?);
                 @field(original, field.name) = null;
             } else {
-                try printer.print("old_value is {?s} and field_value is {?s}\n", .{old_value, field_value});
                 @field(original, field.name) = try allocator.dupe(u8, field_value.?);
                 errdefer allocator.free(@field(original, field.name));
                 allocator.free(old_value.?);
             }
         }
         if (field.type == bool) blk: {
-            try printer.print("Inside field.name: '{s}' type bool\n", .{field.name});
             const old_value = @field(original.*, field.name);
             const field_value = @field(new.*, field.name);
-            try printer.print("field_value={any}, old_value={any}\n", .{field_value, old_value});
             if (old_value == field_value) break :blk;
             @field(original, field.name) = field_value;
-            try printer.print("new_value for original: {any}\n", .{@field(original, field.name)});
         }
         if (field.type == u16) blk: {
             const old_value = @field(original.*, field.name);
@@ -157,6 +140,10 @@ fn validParser(allocator: Allocator, result: ProgramsYaml) !void {
     for (result.programs) |program| {
         if (name_set.contains(program.name)) {
             try printer.print("error parsing: Invalid name you already have a program name '{s}\n'", .{program.name});
+            return ValidParserError.InvalidName;
+        }
+        if (std.mem.eql(u8, program.name, "file")) {
+            try printer.print("error parsing: '{s}' is reserved and cannot be used\n", .{program.name});
             return ValidParserError.InvalidName;
         }
         if (std.mem.eql(u8, program.name, "")) {

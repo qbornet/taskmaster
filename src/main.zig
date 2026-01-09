@@ -48,7 +48,7 @@ pub fn main() !void {
     var allocator: std.mem.Allocator = undefined;
     defer {
         const status = if (optimize == .Debug) gpa_debug.deinit() else gpa_default.deinit();
-        if (optimize == .Debug and status == .leak) @panic("error leak");
+        if (status == .leak) @panic("error leak");
     }
     if (optimize == .Debug) std.debug.print("Optimization mode: '{s}'\n", .{@tagName(optimize)});
     allocator = if (optimize == .Debug) gpa_debug.allocator() else gpa_default.allocator();

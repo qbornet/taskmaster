@@ -5,6 +5,7 @@ const c = std.c;
 
 const ProcessRunner = @import("../lib/ProcessRunner.zig");
 const ProcessProgram = @import("../lib/ProcessProgram.zig");
+const Printer = @import("../lib/Printer.zig");
 const Worker = @import("../lib/Worker.zig");
 const Atomic = std.atomic.Value;
 const Program = parser.Program;
@@ -20,8 +21,15 @@ pub const ExecutionResult = struct {
     process_runner: *ProcessRunner,
 };
 
+var mutex: std.Thread.Mutex = .{};
 pub var process_program_map: std.StringArrayHashMap(*ProcessProgram) = .init(std.heap.page_allocator);
 
+fn getMapSafe(prog_name: []const u8) ?*ProcessProgram {
+    mutex.lock();
+    const ret = process_program_map.get(prog_name);
+    mutex.unlock();
+    return ret;
+}
 
 fn checkExitCodes(status: u32, program: *Program, pp: *ProcessProgram) !void {
     const restart_policies_never = std.mem.eql(u8, program.autorestart, "never");
@@ -44,7 +52,7 @@ fn checkExitCodes(status: u32, program: *Program, pp: *ProcessProgram) !void {
 
 /// Use to check process if they are alive and start new one if they are not.
 pub fn checkUpProcess(allocator: Allocator, program: *Program) !void {
-    const opt_pp: ?*ProcessProgram = process_program_map.get(program.name);
+    const opt_pp: ?*ProcessProgram = getMapSafe(program.name);
     if (opt_pp) |pp| {
         for (0.., pp.getProcessList().items) |idx, pid| {
             const ret = posix.waitpid(pid, 1);
@@ -83,13 +91,14 @@ pub fn checkUpProcess(allocator: Allocator, program: *Program) !void {
 /// Check if process is alive all the available process are alive.
 fn checkAlive(program: *Program) !usize {
     var count: usize = 0;
-    const opt_pp = process_program_map.get(program.name);
+    const opt_pp = getMapSafe(program.name);
     if (opt_pp) |process_program| {
         var to_remove: std.ArrayList(usize) = .empty;
         const allocator = process_program.allocator;
         errdefer to_remove.deinit(allocator);
 
         process_program.mutex.lock();
+        errdefer process_program.mutex.unlock();
         const process_list = process_program.getProcessList();
         const slices = process_list.items;
         for (0..process_program.getSizeProcessList(), slices) |i, pid| {
@@ -140,6 +149,44 @@ fn sendSignal(program: *Program) !void {
         }
         process_program.mutex.unlock();
     }
+}
+
+pub fn checkStatusSafe() !void {
+    var printer: *Printer = undefined;
+    var buffer: [65535]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buffer);
+    const allocator = fba.allocator();
+
+    printer = try .init(allocator, .Stdout, null);
+    defer printer.deinit();
+
+    var count: usize = 0;
+    mutex.lock();
+    var it = process_program_map.iterator();
+    while (it.next()) |entry| : (count += 1){
+        var i: usize = 0;
+        const program_name = entry.key_ptr.*;
+        const process_program = entry.value_ptr.*;
+        process_program.mutex.lock();
+        const process_list = process_program.getProcessList();
+        const len = process_list.items.len;
+        while (i < len) : (i += 1) {
+            const pid = process_list.items[i];
+            std.posix.kill(pid, 0) catch |err| switch (err) {
+                error.PermissionDenied => break,
+                error.ProcessNotFound => break,
+                else => @panic("unknown error when communicating to process")
+            };
+        }
+        if (count+1 == it.len) try printer.print("└── ", .{}) else try printer.print("├── ", .{});
+        if (process_list.items.len != 0 and i == process_list.items.len) {
+            try printer.print("{s} ✓\n", .{program_name});
+        } else {
+            try printer.print("{s} 𐄂\n", .{program_name});
+        }
+        process_program.mutex.unlock();
+    }
+    mutex.unlock();
 }
 
 /// Exit properly the process running if the process didn't exit then,

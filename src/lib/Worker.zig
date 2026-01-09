@@ -20,9 +20,7 @@ fn workerLoop(self: *Self, function: anytype, args: anytype) !void {
     while (!self.should_stop.load(.acquire)) {
         try @call(.auto, function, args);
         std.Thread.sleep(std.time.ns_per_s * 3);
-        std.debug.print("service: '{s}' Thread working...\n", .{self.*.thread_service});
     }
-    std.debug.print("Thread stop\n", .{});
 }
 
 pub fn init(allocator: Allocator, service: []const u8, function: anytype, args: anytype) !*Self {

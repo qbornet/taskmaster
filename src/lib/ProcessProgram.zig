@@ -90,6 +90,8 @@ pub fn pidCheck(self: *Self, pid: posix.pid_t) ?bool {
 
 /// Will set restarting atomic to false.
 pub fn stopRestarting(self: *Self) void {
+    self.*.mutex.lock();
+    defer self.*.mutex.lock();
     self.restarting.store(false, .release);
 }
 

@@ -37,9 +37,14 @@ fn printStatusProgram(opt_program_name: ?[]const u8) PrintStatusProgramError!voi
     if (opt_program_name == null) return PrintStatusProgramError.NoProgramName;
     const program_name = opt_program_name.?;
 
+    if (std.mem.eql(u8, program_name, "file")) {
+        std.debug.print("FileConfig:\n\n{s}\n", .{parser.current_config});
+        return;
+    }
     const opt_pp = exec.process_program_map.get(program_name);
     if (opt_pp == null) return PrintStatusProgramError.ProcessProgramNotFound;
     const process_program = opt_pp.?;
+
 
     // Init allocator
     var buffer: [65536]u8 = undefined;
@@ -80,45 +85,7 @@ fn printStatusProgram(opt_program_name: ?[]const u8) PrintStatusProgramError!voi
 }
 
 fn printStatusAllProgram() !void {
-    var printer: *Printer = undefined;
-    var buffer: [65536]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&buffer);
-    const allocator = fba.allocator();
-
-    printer = try .init(allocator, .Stdout, null);
-    defer printer.deinit();
-
-    try printer.print("File config: \n{s}\n", .{parser.current_config});
-    try printer.print("Status of currently running programs:\n.\n", .{});
-    var count: usize = 0;
-    var it = exec.process_program_map.iterator();
-    while (it.next()) |entry| : (count += 1){
-        var i: usize = 0;
-        const program_name = entry.key_ptr.*;
-        const process_program = entry.value_ptr.*;
-        const opt_prog = parser.autostart_map.get(program_name);
-        if (opt_prog) |prog| {
-            try printer.print("current autostart status: '{s}':{any}\n", .{program_name, prog.autostart});
-            try printer.print("current env status: '{s}':{?s}\n", .{program_name, prog.env});
-        }
-        process_program.mutex.lock();
-        const process_list = process_program.getProcessList();
-        while (i < process_list.items.len) : (i += 1) {
-            const pid = process_list.items[i];
-            std.posix.kill(pid, 0) catch |err| switch (err) {
-                error.PermissionDenied => break,
-                error.ProcessNotFound => break,
-                else => @panic("unknown error when communicating to process")
-            };
-        }
-        if (count+1 == it.len) try printer.print("└── ", .{}) else try printer.print("├── ", .{});
-        if (process_list.items.len != 0 and i == process_list.items.len) {
-            try printer.print("{s} ✓\n", .{program_name});
-        } else {
-            try printer.print("{s} 𐄂\n", .{program_name});
-        }
-        process_program.mutex.unlock();
-    }
+    try exec.checkStatusSafe();
 }
 
 /// Print the current status of all program if no programs is specified or
@@ -219,7 +186,6 @@ fn startProgram(allocator: Allocator, line: []const u8, count: bool) !*Execution
                         error.NoProcessProgramFound => std.debug.print("process_program not found\n", .{}),
                         else => std.debug.print("error for execution: {s}\n", .{@errorName(err)}),
                     }
-                    std.debug.print("error found execution done\n", .{});
                     return err;
                 };
                 validity_pool[i] = execution_result.validity_thread;
@@ -251,7 +217,7 @@ fn printCommandHelp(printer: *Printer, token: []const u8) !void  {
     } else if (mem.eql(u8, token, "start")) {
         try printer.print("usage: 'start <program_name>' (start the program_name provided)\n", .{});
     } else if (mem.eql(u8, token, "status")) {
-        try printer.print("usage: 'status <optional_progam_name>' (print the process status of a program or all status of all program.)\n", .{});
+        try printer.print("usage: 'status <optional_progam_name>|file' (print the process status of a program or all status of all program or 'file' to show current config.)\n", .{});
     } else if (mem.eql(u8, token, "reload")) {
         try printer.print("usage: 'reload' (reload configuration from the same path file provided)\n", .{});
     } else if (mem.eql(u8, token, "restart")) {
