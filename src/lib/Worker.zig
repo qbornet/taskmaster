@@ -17,7 +17,7 @@ thread_service: []const u8,
 
 
 fn workerLoop(self: *Self, function: anytype, args: anytype) !void {
-    while (!self.should_stop.load(.acquire)) {
+    while (!self.should_stop.load(.monotonic)) {
         try @call(.auto, function, args);
         std.Thread.sleep(std.time.ns_per_s * 3);
     }
@@ -33,11 +33,11 @@ pub fn init(allocator: Allocator, service: []const u8, function: anytype, args: 
 }
 
 pub fn stop(self: *Self) void {
-    self.should_stop.store(true, .release);
+    self.should_stop.store(true, .monotonic);
     self.thread.join();
 }
 pub fn deinit(self: *Self) void {
-    if (!self.should_stop.load(.acquire)) self.stop();
+    if (!self.should_stop.load(.monotonic)) self.stop();
     const allocator = self.*.allocator;
     allocator.free(self.*.thread_service);
     allocator.destroy(self);

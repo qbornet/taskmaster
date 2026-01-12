@@ -79,8 +79,6 @@ fn processRunnerValid(self: *Self, pid: posix.pid_t, second: usize, process_prog
     const timer = std.time.ns_per_s * second; 
     std.Thread.sleep(timer);
 
-    self.mutex.lock();
-    defer self.mutex.unlock();
     posix.kill(pid, 0) catch |err| switch (err) {
         error.PermissionDenied => std.debug.print("Unsufficant Permission not allowed to check process\n", .{}),
         error.ProcessNotFound => {
@@ -88,12 +86,12 @@ fn processRunnerValid(self: *Self, pid: posix.pid_t, second: usize, process_prog
         },
         else => @panic("unknown error when checking process\n"),
     };
-    self.valid_process.store(true, .release);
+    self.valid_process.store(true, .monotonic);
     try process_program.pidAdd(pid);
 }
 
 pub fn getProcessValidity(self: *Self) bool {
-    return self.*.valid_process.load(.acquire);
+    return self.*.valid_process.load(.monotonic);
 }
 
 /// start execution of command and return pid.
@@ -160,7 +158,7 @@ pub fn deinit(self: *Self) void {
     self.*.mutex.lock();
     allocator.free(self.*.stdout_path);
     allocator.free(self.*.stderr_path);
-    self.*.valid_process.store(false, .release);
+    self.*.valid_process.store(false, .monotonic);
     self.*.mutex.unlock();
     allocator.destroy(self.*.mutex);
     allocator.destroy(self);

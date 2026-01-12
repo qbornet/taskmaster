@@ -387,11 +387,15 @@ pub fn startParsing(allocator: Allocator, path: []const u8, printer: *Printer)  
             try programs_map.put(program_clone.name, program_clone);
             process_program = try .init(allocator, clone.name);
             errdefer process_program.deinit();
+            exec.mutex.lock();
             try exec.process_program_map.put(clone.name, process_program);
+            exec.mutex.unlock();
         } else {
             process_program = try .init(allocator, clone.name);
             errdefer process_program.deinit();
+            exec.mutex.lock();
             try exec.process_program_map.put(clone.name, process_program);
+            exec.mutex.unlock();
             try programs_map.put(clone.name, clone);
         }
     }

@@ -36,11 +36,15 @@ pub fn init(allocator: Allocator, name: []const u8) !*Self {
 
 /// return `process_list` resources need to use mutex for using `process_list`
 pub fn getProcessList(self: *Self) std.ArrayList(posix.pid_t) {
+    self.*.mutex.lock();
+    defer self.*.mutex.unlock();
     return self.*.process_list;
 }
 
 /// return size of process_list
 pub fn getSizeProcessList(self: *Self) usize {
+    self.*.mutex.lock();
+    defer self.*.mutex.unlock();
     return self.*.process_list.items.len;
 }
 
@@ -90,15 +94,13 @@ pub fn pidCheck(self: *Self, pid: posix.pid_t) ?bool {
 
 /// Will set restarting atomic to false.
 pub fn stopRestarting(self: *Self) void {
-    self.*.mutex.lock();
-    defer self.*.mutex.lock();
-    self.restarting.store(false, .release);
+    self.restarting.store(false, .monotonic);
 }
 
 /// Return value of atomic about restart, `false` mean no restart should be done,
 /// `true` mean restart should be done.
 pub fn getRestarting(self: *Self) bool {
-    return self.*.restarting.load(.acquire);
+    return self.*.restarting.load(.monotonic);
 }
 
 pub fn deinit(self: *Self) void {

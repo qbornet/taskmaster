@@ -41,7 +41,9 @@ fn printStatusProgram(opt_program_name: ?[]const u8) PrintStatusProgramError!voi
         std.debug.print("FileConfig:\n\n{s}\n", .{parser.current_config});
         return;
     }
+    exec.mutex.lock();
     const opt_pp = exec.process_program_map.get(program_name);
+    exec.mutex.unlock();
     if (opt_pp == null) return PrintStatusProgramError.ProcessProgramNotFound;
     const process_program = opt_pp.?;
 
@@ -56,9 +58,10 @@ fn printStatusProgram(opt_program_name: ?[]const u8) PrintStatusProgramError!voi
 
     var i: usize = 0;
     var count: usize = 0;
+    std.debug.print("Print status program acquireing lock\n", .{});
+    const process_list = process_program.getProcessList();
     process_program.mutex.lock();
     defer process_program.mutex.unlock();
-    const process_list = process_program.getProcessList();
     const slices = process_list.items;
     if (slices.len == 0) {
         try printer.print("{s} as no running process...\n", .{program_name});
