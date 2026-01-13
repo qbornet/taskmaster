@@ -2,7 +2,6 @@ const std = @import("std");
 const mem = std.mem;
 
 const parser = @import("parser/parser.zig");
-const reader = @import("reader/readline.zig");
 const conf = @import("programs/configuration.zig");
 const exec = @import("programs/execution.zig");
 const programs = @import("programs/programs.zig");
@@ -12,6 +11,7 @@ const global = @import("lib/global_map.zig");
 const optimize = @import("builtin").mode;
 const Printer = @import("lib/Printer.zig");
 const Allocator = std.mem.Allocator;
+const LineReader = @import("lib/LineReader.zig");
 
 /// Use only for freeing overwriten variable not for gracefull exit.  
 fn freeExecutionPool(allocator: Allocator, ep: std.ArrayList(exec.ExecutionResult)) void {
@@ -57,6 +57,8 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
+    var reader: LineReader  = try .init(allocator);
+    defer reader.deinit();
     const stderr: *Printer = try .init(allocator, .Stderr, null);
     defer stderr.deinit();
     const stdout: *Printer = try .init(allocator, .Stdout, null);
@@ -70,7 +72,10 @@ pub fn main() !void {
     const tmp_pool = try conf.loadConfiguration(allocator, true);
     execution_pool.* = tmp_pool.?;
     while (true) {
-        const line = try reader.readLine(allocator, stdin);
+        const opt_line = try reader.readLine("taskmaster> ");
+        if (opt_line == null) continue;
+
+        const line = opt_line.?;
         const program_action = programs.doProgramAction(allocator, line) catch |err| {
             switch (err) {
                 error.HighTokenCount => try stderr.print("Too many program entry passed\n", .{}),

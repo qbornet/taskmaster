@@ -1,6 +1,5 @@
 # TODO
 
-
 ## Reload Configuration
 
 Need to handle reloading old process.
@@ -15,9 +14,3 @@ Check that parsing is properly done also **unsure that program is unique you can
 
 Need to test more cmdline find bugs, potential edge cases.
 Test exitcodes are handle properly as well as restart policies, external kill done through process. 
-
-# FIX
-
-## DATA RACE & DEADLOCK
-
-Check data race and deadlock 

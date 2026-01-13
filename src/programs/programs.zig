@@ -58,7 +58,6 @@ fn printStatusProgram(opt_program_name: ?[]const u8) PrintStatusProgramError!voi
 
     var i: usize = 0;
     var count: usize = 0;
-    std.debug.print("Print status program acquireing lock\n", .{});
     const process_list = process_program.getProcessList();
     process_program.mutex.lock();
     defer process_program.mutex.unlock();

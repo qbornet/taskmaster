@@ -200,7 +200,6 @@ pub fn exitCleanly(program: *Program) !void {
     try sendSignal(program);
     std.Thread.sleep(time_sleep);
 
-    std.debug.print("start checkAlive again\n", .{});
     const dead_process = try checkAlive(program);
     if ((program.numprocs - dead_process) == 0) {
         return;
